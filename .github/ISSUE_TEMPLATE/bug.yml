@@ -1,5 +1,5 @@
 name: Bug
-desription: Create a Bug
+description: Create a Bug
 labels: ["bug"]
 body:
   - type: textarea
