@@ -82,8 +82,21 @@ jobs:
       - name: Run pylint
         run: pylint src tests
 
+  release:
+    if: github.event_name == 'push' && github.ref =='refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      version: ${{ steps.rp.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: rp
+
   publish:
-    needs: docker
+    needs: [docker, release]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -116,8 +129,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ steps.version.outputs.value }}
             type=raw,value=main
+            type=sha
+            type=raw,value=${{ needs.release.outputs.version }},enable=${{ needs.release.outputs.release_created == 'true' }}
           labels: |
             org.opencontainers.image.version=${{ steps.version.outputs.value }}
 
