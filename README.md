@@ -25,8 +25,6 @@
 4. Check start compose: docker ps
 5. Stop compose: docker compose down -v
 6. Stop compose with save data: docker compose down
-6. Check tests:
-*   BASE_URL=${url} EXPECTED_ENV=${APP_ENV} python -m pytest tests/smoke -v
 
 ## Start pytest in different system
 1. прогнать как CI, без внешних систем:

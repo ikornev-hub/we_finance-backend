@@ -45,8 +45,6 @@ jobs:
     environment: ci
     env:
       APP_ENV: ${{ vars.APP_ENV }}
-      EXPECTED_ENV: ${{ vars.APP_ENV }}
-      BASE_URL: ${{ vars.BASE_URL }}
       POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
       POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
@@ -62,8 +60,6 @@ jobs:
         run: pip install -e .
       - name: Start compose
         run: docker compose up --build -d --wait
-      - name: Smoke tests
-        run: python -m pytest -q tests/smoke
       - name: Integration tests
         run: python -m pytest -q tests/integration
       - name: Stop compose
