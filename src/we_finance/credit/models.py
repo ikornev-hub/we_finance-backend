@@ -74,6 +74,14 @@ class Prepayment:
     mode: PrepaymentMode
 
 
+@dataclass(frozen=True)
+class StoredLoan:
+    """Что хранится: кредит и его ЧДП (события). Всё остальное вычисляется."""
+
+    loan: Loan
+    prepayments: tuple[Prepayment, ...] = ()
+
+
 class EntryKind(StrEnum):
     """Тип записи в истории платежей."""
 
