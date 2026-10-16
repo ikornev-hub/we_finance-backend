@@ -8,6 +8,7 @@ from we_finance.credit.calendar_ru import is_business_day
 from we_finance.credit.models import (
     DayCount,
     Loan,
+    PaymentDayChange,
     Prepayment,
     PrepaymentMode,
     RatePeriod,
@@ -79,14 +80,33 @@ def next_business_day(day: date) -> date:
     return day
 
 
-def payment_dates(first_payment_date: date, months: int, weekend_shift: bool) -> list[date]:
-    """Даты всех платежей: k-я — от первой даты (не от предыдущей); перенос на рабочий день."""
-    if weekend_shift:
-        dates = [
-            next_business_day(add_months(first_payment_date, offset)) for offset in range(months)
-        ]
-    else:
-        dates = [add_months(first_payment_date, offset) for offset in range(months)]
+def with_payment_day(nominal: date, changes: Sequence[PaymentDayChange]) -> date:
+    """Номинальная дата с днём платежа из последней действующей смены (если день есть в месяце)."""
+    day = None
+    for change in changes:
+        if change.start <= nominal:
+            day = change.day
+    if day is None:
+        return nominal
+    last_day = calendar.monthrange(nominal.year, nominal.month)[1]
+    return nominal.replace(day=min(day, last_day))
+
+
+def payment_dates(
+    first_payment_date: date,
+    months: int,
+    weekend_shift: bool,
+    day_changes: Sequence[PaymentDayChange] = (),
+) -> list[date]:
+    """Даты всех платежей (требования 2.1).
+
+    k-я дата — от первой даты (не от предыдущей), затем день из смены дня платежа,
+    затем перенос на рабочий день, если weekend_shift.
+    """
+    dates = []
+    for offset in range(months):
+        nominal = with_payment_day(add_months(first_payment_date, offset), day_changes)
+        dates.append(next_business_day(nominal) if weekend_shift else nominal)
     return dates
 
 
@@ -170,7 +190,9 @@ def build_schedule(loan: Loan, prepayments: Sequence[Prepayment] = ()) -> list[S
     Последний платёж (по сроку или раньше, если долг уже помещается в платёж) закрывает остаток.
     ЧДП в дату платежа применяется после обычного платежа, ЧДП между датами — внутри периода.
     """
-    dates = payment_dates(loan.first_payment_date, loan.months, loan.weekend_shift)
+    dates = payment_dates(
+        loan.first_payment_date, loan.months, loan.weekend_shift, loan.payment_day_changes
+    )
     rows: list[ScheduleRow] = []
     plan = _Plan(balance=loan.principal, payment=loan.payment, last_number=loan.months)
     ordered = sorted(prepayments, key=lambda prepayment: prepayment.date)

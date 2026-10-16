@@ -27,7 +27,15 @@ class RatePeriod:
 
 
 @dataclass(frozen=True)
-class Loan:  # pylint: disable=too-many-instance-attributes  # 11 параметров договора
+class PaymentDayChange:
+    """Смена дня платежа по заявлению: платежи с номинальной датой не раньше start — в день day."""
+
+    start: date
+    day: int
+
+
+@dataclass(frozen=True)
+class Loan:  # pylint: disable=too-many-instance-attributes  # параметры договора и его изменения
     """Стартовые данные кредита (хранимое)."""
 
     id: str
@@ -41,6 +49,7 @@ class Loan:  # pylint: disable=too-many-instance-attributes  # 11 парамет
     day_count: DayCount = DayCount.ACTUAL
     weekend_shift: bool = True
     monthly_fee: Decimal = Decimal("0.00")
+    payment_day_changes: tuple[PaymentDayChange, ...] = ()
 
 
 @dataclass(frozen=True)
