@@ -6,11 +6,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from we_finance.credit import service
-from we_finance.credit.schedule import build_schedule
 from we_finance.credit.schemas import CalculationIn, CalculationOut, LoanIn, ScheduleRowOut
 from we_finance.routers.deps import get_today
 
-router = APIRouter(prefix="/credit", tags=["credit calculator"])
+router = APIRouter(prefix="/calculator", tags=["calculator"])
 
 
 @router.post(
@@ -20,7 +19,7 @@ router = APIRouter(prefix="/credit", tags=["credit calculator"])
 )
 def calculate_schedule(loan: LoanIn) -> list[ScheduleRowOut]:
     """График платежей по параметрам кредита."""
-    rows = build_schedule(service.to_loan(loan))
+    rows = service.schedule_rows(service.to_loan(loan))
     return [ScheduleRowOut.model_validate(row) for row in rows]
 
 

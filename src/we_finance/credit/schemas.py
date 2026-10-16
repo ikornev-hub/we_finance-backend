@@ -13,6 +13,21 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from we_finance.credit.models import DayCount, EntryKind, PrepaymentMode
 
+# Примеры для Swagger (кнопка Try it out): учебный кредит из требований, не реальные данные.
+EXAMPLE_LOAN = {
+    "principal": "1200000.00",
+    "rates": [{"start": "2026-01-15", "annual_rate": "12"}],
+    "payment": "39857.17",
+    "months": 36,
+    "issue_date": "2026-01-15",
+    "first_payment_date": "2026-02-15",
+    "day_count": "actual",
+    "weekend_shift": False,
+    "monthly_fee": "0.00",
+    "payment_day_changes": [],
+}
+EXAMPLE_PREPAYMENT = {"date": "2026-07-15", "amount": "200000.00", "mode": "reduce_term"}
+
 # ---------- запрос ----------
 
 
@@ -33,6 +48,8 @@ class PaymentDayChangeIn(BaseModel):
 class PrepaymentIn(BaseModel):
     """ЧДП: дата, сумма, режим."""
 
+    model_config = ConfigDict(json_schema_extra={"examples": [EXAMPLE_PREPAYMENT]})
+
     date: date
     amount: Decimal = Field(gt=0, decimal_places=2)
     mode: PrepaymentMode
@@ -40,6 +57,8 @@ class PrepaymentIn(BaseModel):
 
 class LoanIn(BaseModel):
     """Параметры кредита для расчёта графика (требования 2.10)."""
+
+    model_config = ConfigDict(json_schema_extra={"examples": [EXAMPLE_LOAN]})
 
     principal: Decimal = Field(gt=0, decimal_places=2)
     rates: list[RatePeriodIn] = Field(min_length=1)
@@ -69,6 +88,14 @@ class LoanIn(BaseModel):
 
 class CalculationIn(BaseModel):
     """Кредит, ЧДП и дата, на которую показать состояние (по умолчанию — сегодня)."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {"loan": EXAMPLE_LOAN, "prepayments": [EXAMPLE_PREPAYMENT], "as_of": "2026-10-16"}
+            ]
+        }
+    )
 
     loan: LoanIn
     prepayments: list[PrepaymentIn] = []
@@ -167,6 +194,10 @@ class CalculationOut(BaseModel):
 
 class LoanCreateIn(LoanIn):
     """Новый кредит: параметры договора и название (сценарий С1)."""
+
+    model_config = ConfigDict(
+        json_schema_extra={"examples": [{"name": "Учебный кредит", **EXAMPLE_LOAN}]}
+    )
 
     name: str = Field(min_length=1, max_length=100)
 

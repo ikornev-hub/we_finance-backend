@@ -98,9 +98,30 @@ def check_prepayments(loan: Loan, prepayments: Sequence[Prepayment]) -> None:
                 f"ЧДП {prepayment.date} должен быть позже даты выдачи {loan.issue_date}"
             )
     rows, _ = calculate(loan, prepayments)
+    _check_debt_decreases(rows)
     late = [p for p in prepayments if p.date > rows[-1].date]
     if late:
         raise CreditError(f"ЧДП {late[0].date} позже закрытия кредита {rows[-1].date}")
+
+
+def _check_debt_decreases(rows: Sequence[ScheduleRow]) -> None:
+    """Каждый платёж гасит долг (требования 2.10): иначе платёж меньше процентов и комиссии.
+
+    Проверяется весь график, а не только первый период: ставка может вырасти позже.
+    """
+    for row in rows:
+        if row.principal < 0:
+            raise CreditError(
+                f"Платёж {row.payment} на {row.date} меньше процентов {row.interest} "
+                f"и комиссии {row.fee}: долг не уменьшается"
+            )
+
+
+def schedule_rows(loan: Loan) -> list[ScheduleRow]:
+    """График без ЧДП с проверкой, что платёж гасит долг (калькулятор графика)."""
+    check_prepayments(loan, ())
+    rows, _ = calculate(loan)
+    return rows
 
 
 def build_calculation(loan: Loan, prepayments: Sequence[Prepayment], as_of: date) -> CalculationOut:
@@ -141,6 +162,7 @@ def loan_detail(repo: LoanRepository, loan_id: str, as_of: date) -> LoanDetailOu
 def create_loan(repo: LoanRepository, loan_in: LoanCreateIn, as_of: date) -> LoanDetailOut:
     """Добавить кредит (С1): id выдаёт система."""
     loan = to_loan(loan_in, loan_id=uuid4().hex, name=loan_in.name)
+    check_prepayments(loan, ())  # проверка до сохранения: битый кредит не должен попасть в файл
     repo.add(loan)
     return loan_detail(repo, loan.id, as_of)
 
