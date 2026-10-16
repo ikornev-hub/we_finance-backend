@@ -2,12 +2,13 @@ from fastapi import FastAPI, Response
 
 from we_finance import __version__
 from we_finance.db import check_db
-from we_finance.routers import money
+from we_finance.routers import credit, money
 from we_finance.schemas import HealthResponse, VersionResponse
 from we_finance.settings import get_app_env
 
 app = FastAPI(title="We Finance", version=__version__)
 app.include_router(money.router, prefix="/api/v1")
+app.include_router(credit.router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["service"], summary="healthchecker", description="Get health app status")
