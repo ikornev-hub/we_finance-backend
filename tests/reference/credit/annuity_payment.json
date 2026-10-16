@@ -1,0 +1,50 @@
+{
+  "rule": "we_finance-analysts/requirements/system/credit.md §2.5",
+  "source": "оракул ментора (независимый скрипт, не код backend), правила requirements/system/credit.md",
+  "cases": [
+    {
+      "id": "teaching-1200000-12pct-36",
+      "input": {
+        "principal": "1200000",
+        "annual_rate": "12",
+        "months": 36
+      },
+      "expected": {
+        "payment": "39857.17"
+      }
+    },
+    {
+      "id": "short-3-months",
+      "input": {
+        "principal": "30000",
+        "annual_rate": "12",
+        "months": 3
+      },
+      "expected": {
+        "payment": "10200.66"
+      }
+    },
+    {
+      "id": "zero-rate",
+      "input": {
+        "principal": "120000",
+        "annual_rate": "0",
+        "months": 12
+      },
+      "expected": {
+        "payment": "10000.00"
+      }
+    },
+    {
+      "id": "small-1000-12",
+      "input": {
+        "principal": "1000",
+        "annual_rate": "12",
+        "months": 12
+      },
+      "expected": {
+        "payment": "88.85"
+      }
+    }
+  ]
+}
