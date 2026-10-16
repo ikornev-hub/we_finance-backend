@@ -36,5 +36,10 @@ select = ["E", "F", "W", "I", "UP", "B", "S"]
 [tool.pylint.format]
 max-line-length = 100
 
+[tool.pylint.similarities]
+# Модели ядра (credit/models.py) и схемы API (credit/schemas.py) повторяют поля намеренно:
+# слои разделены, чтобы API не зависел от внутренней модели.
+min-similarity-lines = 8
+
 [tool.pylint."messages control"]
 disable = ["missing-module-docstring", "missing-function-docstring"]
