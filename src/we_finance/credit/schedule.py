@@ -137,24 +137,48 @@ def _apply_prepayment(
         plan.last_number = None
 
 
+def _accrue_period(
+    loan: Loan,
+    plan: _Plan,
+    prepayments: Sequence[Prepayment],
+    dates: Sequence[date],
+    number: int,
+) -> Decimal:
+    """Неокруглённые проценты за период перед платежом number (требования 2.3, 2.6).
+
+    ЧДП, попавшие внутрь периода, применяются по ходу: до даты ЧДП проценты идут
+    на старый остаток, после — на новый. prepayments должны быть отсортированы по дате.
+    """
+    start = loan.issue_date if number == 1 else dates[number - 2]
+    end = dates[number - 1]
+    total = Decimal("0")
+    for prepayment in prepayments:
+        if start < prepayment.date < end:
+            total += interest_for_period(
+                plan.balance, loan.rates, start, prepayment.date, loan.day_count
+            )
+            # ЧДП между платежами number-1 и number: ближайший платёж — уже по новому плану
+            _apply_prepayment(loan, plan, prepayment, number - 1, dates[number - 1 :])
+            start = prepayment.date
+    return total + interest_for_period(plan.balance, loan.rates, start, end, loan.day_count)
+
+
 def build_schedule(loan: Loan, prepayments: Sequence[Prepayment] = ()) -> list[ScheduleRow]:
     """График платежей от выдачи до закрытия с учётом ЧДП (требования 2.4, 2.6).
 
     Платёж банка включает комиссию: платёж = в долг + проценты + комиссия.
     Последний платёж (по сроку или раньше, если долг уже помещается в платёж) закрывает остаток.
-    ЧДП в дату платежа применяется после обычного платежа.
+    ЧДП в дату платежа применяется после обычного платежа, ЧДП между датами — внутри периода.
     """
     dates = payment_dates(loan.first_payment_date, loan.months, loan.weekend_shift)
     rows: list[ScheduleRow] = []
     plan = _Plan(balance=loan.principal, payment=loan.payment, last_number=loan.months)
-    previous_date = loan.issue_date
+    ordered = sorted(prepayments, key=lambda prepayment: prepayment.date)
     accrued_total = Decimal("0")
     interest_paid = Decimal("0")
 
     for number, pay_date in enumerate(dates, start=1):
-        accrued_total += interest_for_period(
-            plan.balance, loan.rates, previous_date, pay_date, loan.day_count
-        )
+        accrued_total += _accrue_period(loan, plan, ordered, dates, number)
         interest = accrued_total.quantize(CENT, rounding=ROUND_HALF_UP) - interest_paid
         interest_paid += interest
         closing = plan.balance + interest + loan.monthly_fee
@@ -177,11 +201,10 @@ def build_schedule(loan: Loan, prepayments: Sequence[Prepayment] = ()) -> list[S
                 fee=loan.monthly_fee,
             )
         )
-        for prepayment in prepayments:
+        for prepayment in ordered:
             if prepayment.date == pay_date:
                 _apply_prepayment(loan, plan, prepayment, number, dates[number:])
         if plan.balance == 0:
             break
-        previous_date = pay_date
 
     return rows
