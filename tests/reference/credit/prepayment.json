@@ -1,0 +1,319 @@
+{
+  "rule": "we_finance-analysts/requirements/system/credit.md §2.6",
+  "source": "оракул ментора (независимый скрипт, не код backend), правила requirements/system/credit.md",
+  "cases": [
+    {
+      "id": "on-payment-date-reduce-term",
+      "input": {
+        "loan": {
+          "principal": "1200000",
+          "rates": [
+            {
+              "start": "2026-01-15",
+              "annual_rate": "12"
+            }
+          ],
+          "payment": "39857.17",
+          "months": 36,
+          "issue_date": "2026-01-15",
+          "first_payment_date": "2026-02-15",
+          "day_count": "actual"
+        },
+        "prepayments": [
+          {
+            "date": "2026-07-15",
+            "amount": "200000",
+            "mode": "reduce_term"
+          }
+        ]
+      },
+      "expected": {
+        "rows_count": 30,
+        "last_row_date": "2028-07-15",
+        "last_payment": "16437.52",
+        "total_interest": "172295.45",
+        "savings": "62170.40",
+        "applied": [
+          {
+            "date": "2026-07-15",
+            "amount": "200000",
+            "balance_after": "828030.49"
+          }
+        ]
+      }
+    },
+    {
+      "id": "on-payment-date-reduce-payment",
+      "input": {
+        "loan": {
+          "principal": "1200000",
+          "rates": [
+            {
+              "start": "2026-01-15",
+              "annual_rate": "12"
+            }
+          ],
+          "payment": "39857.17",
+          "months": 36,
+          "issue_date": "2026-01-15",
+          "first_payment_date": "2026-02-15",
+          "day_count": "actual"
+        },
+        "prepayments": [
+          {
+            "date": "2026-07-15",
+            "amount": "200000",
+            "mode": "reduce_payment"
+          }
+        ]
+      },
+      "expected": {
+        "rows_count": 36,
+        "last_row_date": "2029-01-15",
+        "last_payment": "32411.18",
+        "total_interest": "202008.18",
+        "savings": "32457.67",
+        "applied": [
+          {
+            "date": "2026-07-15",
+            "amount": "200000",
+            "balance_after": "828030.49"
+          }
+        ],
+        "row_7": {
+          "date": "2026-08-15",
+          "payment": "32084.62",
+          "principal": "23645.51",
+          "interest": "8439.11",
+          "balance": "804384.98"
+        }
+      }
+    },
+    {
+      "id": "mid-period-reduce-term",
+      "input": {
+        "loan": {
+          "principal": "1200000",
+          "rates": [
+            {
+              "start": "2026-01-15",
+              "annual_rate": "12"
+            }
+          ],
+          "payment": "39857.17",
+          "months": 36,
+          "issue_date": "2026-01-15",
+          "first_payment_date": "2026-02-15",
+          "day_count": "actual"
+        },
+        "prepayments": [
+          {
+            "date": "2026-07-01",
+            "amount": "200000",
+            "mode": "reduce_term"
+          }
+        ]
+      },
+      "expected": {
+        "rows_count": 30,
+        "last_row_date": "2028-07-15",
+        "last_payment": "15268.47",
+        "total_interest": "171126.40",
+        "savings": "63339.45",
+        "applied": [
+          {
+            "date": "2026-07-01",
+            "amount": "200000",
+            "balance_after": "857457.94"
+          }
+        ],
+        "row_6": {
+          "date": "2026-07-15",
+          "payment": "39857.17",
+          "principal": "30348.00",
+          "interest": "9509.17",
+          "balance": "827109.94"
+        }
+      }
+    },
+    {
+      "id": "mid-period-reduce-payment",
+      "input": {
+        "loan": {
+          "principal": "1200000",
+          "rates": [
+            {
+              "start": "2026-01-15",
+              "annual_rate": "12"
+            }
+          ],
+          "payment": "39857.17",
+          "months": 36,
+          "issue_date": "2026-01-15",
+          "first_payment_date": "2026-02-15",
+          "day_count": "actual"
+        },
+        "prepayments": [
+          {
+            "date": "2026-07-01",
+            "amount": "200000",
+            "mode": "reduce_payment"
+          }
+        ]
+      },
+      "expected": {
+        "rows_count": 36,
+        "last_row_date": "2029-01-15",
+        "last_payment": "33894.63",
+        "total_interest": "202340.98",
+        "savings": "32124.87",
+        "applied": [
+          {
+            "date": "2026-07-01",
+            "amount": "200000",
+            "balance_after": "857457.94"
+          }
+        ],
+        "row_6": {
+          "date": "2026-07-15",
+          "payment": "32305.35",
+          "principal": "22796.18",
+          "interest": "9509.17",
+          "balance": "834661.76"
+        }
+      }
+    },
+    {
+      "id": "two-prepayments-different-modes",
+      "input": {
+        "loan": {
+          "principal": "1200000",
+          "rates": [
+            {
+              "start": "2026-01-15",
+              "annual_rate": "12"
+            }
+          ],
+          "payment": "39857.17",
+          "months": 36,
+          "issue_date": "2026-01-15",
+          "first_payment_date": "2026-02-15",
+          "day_count": "actual"
+        },
+        "prepayments": [
+          {
+            "date": "2026-07-15",
+            "amount": "200000",
+            "mode": "reduce_term"
+          },
+          {
+            "date": "2027-03-15",
+            "amount": "100000",
+            "mode": "reduce_payment"
+          }
+        ]
+      },
+      "expected": {
+        "rows_count": 30,
+        "last_row_date": "2028-07-15",
+        "last_payment": "31882.74",
+        "total_interest": "165265.07",
+        "savings": "69200.78",
+        "applied": [
+          {
+            "date": "2026-07-15",
+            "amount": "200000",
+            "balance_after": "828030.49"
+          },
+          {
+            "date": "2027-03-15",
+            "amount": "100000",
+            "balance_after": "466440.71"
+          }
+        ]
+      }
+    },
+    {
+      "id": "full-payoff-exact-balance",
+      "input": {
+        "loan": {
+          "principal": "1200000",
+          "rates": [
+            {
+              "start": "2026-01-15",
+              "annual_rate": "12"
+            }
+          ],
+          "payment": "39857.17",
+          "months": 36,
+          "issue_date": "2026-01-15",
+          "first_payment_date": "2026-02-15",
+          "day_count": "actual"
+        },
+        "prepayments": [
+          {
+            "date": "2026-07-15",
+            "amount": "1028030.49",
+            "mode": "reduce_term"
+          }
+        ]
+      },
+      "expected": {
+        "rows_count": 6,
+        "last_row_date": "2026-07-15",
+        "last_payment": "39857.17",
+        "total_interest": "67173.51",
+        "savings": "167292.34",
+        "applied": [
+          {
+            "date": "2026-07-15",
+            "amount": "1028030.49",
+            "balance_after": "0.00"
+          }
+        ]
+      }
+    },
+    {
+      "id": "overpay-closes-with-excess",
+      "input": {
+        "loan": {
+          "principal": "1200000",
+          "rates": [
+            {
+              "start": "2026-01-15",
+              "annual_rate": "12"
+            }
+          ],
+          "payment": "39857.17",
+          "months": 36,
+          "issue_date": "2026-01-15",
+          "first_payment_date": "2026-02-15",
+          "day_count": "actual"
+        },
+        "prepayments": [
+          {
+            "date": "2026-07-15",
+            "amount": "1100000",
+            "mode": "reduce_term"
+          }
+        ]
+      },
+      "expected": {
+        "rows_count": 6,
+        "last_row_date": "2026-07-15",
+        "last_payment": "39857.17",
+        "total_interest": "67173.51",
+        "savings": "167292.34",
+        "applied": [
+          {
+            "date": "2026-07-15",
+            "amount": "1028030.49",
+            "balance_after": "0.00"
+          }
+        ],
+        "excess": "71969.51",
+        "warning": "amount_exceeds_balance"
+      }
+    }
+  ]
+}

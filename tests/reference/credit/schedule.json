@@ -1,0 +1,234 @@
+{
+  "rule": "we_finance-analysts/requirements/system/credit.md §2.4",
+  "source": "оракул ментора (независимый скрипт, не код backend), правила requirements/system/credit.md",
+  "cases": [
+    {
+      "id": "teaching-actual",
+      "input": {
+        "principal": "1200000",
+        "rates": [
+          {
+            "start": "2026-01-15",
+            "annual_rate": "12"
+          }
+        ],
+        "payment": "39857.17",
+        "months": 36,
+        "issue_date": "2026-01-15",
+        "first_payment_date": "2026-02-15",
+        "day_count": "actual"
+      },
+      "expected": {
+        "rows_count": 36,
+        "first_rows": [
+          {
+            "number": 1,
+            "date": "2026-02-15",
+            "payment": "39857.17",
+            "principal": "27627.03",
+            "interest": "12230.14",
+            "balance": "1172372.97"
+          },
+          {
+            "number": 2,
+            "date": "2026-03-15",
+            "payment": "39857.17",
+            "principal": "29064.91",
+            "interest": "10792.26",
+            "balance": "1143308.06"
+          },
+          {
+            "number": 3,
+            "date": "2026-04-15",
+            "payment": "39857.17",
+            "principal": "28204.82",
+            "interest": "11652.35",
+            "balance": "1115103.24"
+          }
+        ],
+        "last_row": {
+          "number": 36,
+          "date": "2029-01-15",
+          "payment": "39464.90",
+          "principal": "39067.30",
+          "interest": "397.60",
+          "balance": "0"
+        },
+        "total_interest": "234465.85",
+        "total_principal": "1200000.00"
+      }
+    },
+    {
+      "id": "teaching-365",
+      "input": {
+        "principal": "1200000",
+        "rates": [
+          {
+            "start": "2026-01-15",
+            "annual_rate": "12"
+          }
+        ],
+        "payment": "39857.17",
+        "months": 36,
+        "issue_date": "2026-01-15",
+        "first_payment_date": "2026-02-15",
+        "day_count": "365"
+      },
+      "expected": {
+        "rows_count": 36,
+        "first_rows": [
+          {
+            "number": 1,
+            "date": "2026-02-15",
+            "payment": "39857.17",
+            "principal": "27627.03",
+            "interest": "12230.14",
+            "balance": "1172372.97"
+          },
+          {
+            "number": 2,
+            "date": "2026-03-15",
+            "payment": "39857.17",
+            "principal": "29064.91",
+            "interest": "10792.26",
+            "balance": "1143308.06"
+          },
+          {
+            "number": 3,
+            "date": "2026-04-15",
+            "payment": "39857.17",
+            "principal": "28204.82",
+            "interest": "11652.35",
+            "balance": "1115103.24"
+          }
+        ],
+        "last_row": {
+          "number": 36,
+          "date": "2029-01-15",
+          "payment": "39558.94",
+          "principal": "39159.83",
+          "interest": "399.11",
+          "balance": "0"
+        },
+        "total_interest": "234559.89",
+        "total_principal": "1200000.00"
+      }
+    },
+    {
+      "id": "rate-drop-12-to-6-same-payment",
+      "input": {
+        "principal": "1200000",
+        "rates": [
+          {
+            "start": "2026-01-15",
+            "annual_rate": "12"
+          },
+          {
+            "start": "2027-01-16",
+            "annual_rate": "6"
+          }
+        ],
+        "payment": "39857.17",
+        "months": 36,
+        "issue_date": "2026-01-15",
+        "first_payment_date": "2026-02-15",
+        "day_count": "actual"
+      },
+      "expected": {
+        "rows_count": 35,
+        "first_rows": [
+          {
+            "number": 1,
+            "date": "2026-02-15",
+            "payment": "39857.17",
+            "principal": "27627.03",
+            "interest": "12230.14",
+            "balance": "1172372.97"
+          },
+          {
+            "number": 2,
+            "date": "2026-03-15",
+            "payment": "39857.17",
+            "principal": "29064.91",
+            "interest": "10792.26",
+            "balance": "1143308.06"
+          },
+          {
+            "number": 3,
+            "date": "2026-04-15",
+            "payment": "39857.17",
+            "principal": "28204.82",
+            "interest": "11652.35",
+            "balance": "1115103.24"
+          }
+        ],
+        "last_row": {
+          "number": 35,
+          "date": "2028-12-15",
+          "payment": "20281.96",
+          "principal": "20182.70",
+          "interest": "99.26",
+          "balance": "0"
+        },
+        "total_interest": "175425.74",
+        "total_principal": "1200000.00"
+      }
+    },
+    {
+      "id": "payment-too-small-last-is-bigger",
+      "input": {
+        "principal": "1200000",
+        "rates": [
+          {
+            "start": "2026-01-15",
+            "annual_rate": "12"
+          }
+        ],
+        "payment": "39000",
+        "months": 36,
+        "issue_date": "2026-01-15",
+        "first_payment_date": "2026-02-15",
+        "day_count": "actual"
+      },
+      "expected": {
+        "rows_count": 36,
+        "first_rows": [
+          {
+            "number": 1,
+            "date": "2026-02-15",
+            "payment": "39000",
+            "principal": "26769.86",
+            "interest": "12230.14",
+            "balance": "1173230.14"
+          },
+          {
+            "number": 2,
+            "date": "2026-03-15",
+            "payment": "39000",
+            "principal": "28199.85",
+            "interest": "10800.15",
+            "balance": "1145030.29"
+          },
+          {
+            "number": 3,
+            "date": "2026-04-15",
+            "payment": "39000",
+            "principal": "27330.10",
+            "interest": "11669.90",
+            "balance": "1117700.19"
+          }
+        ],
+        "last_row": {
+          "number": 36,
+          "date": "2029-01-15",
+          "payment": "75540.33",
+          "principal": "74779.27",
+          "interest": "761.06",
+          "balance": "0"
+        },
+        "total_interest": "240540.33",
+        "total_principal": "1200000.00"
+      }
+    }
+  ]
+}

@@ -1,0 +1,162 @@
+{
+  "rule": "we_finance-analysts/requirements/system/credit.md §2.3",
+  "source": "оракул ментора (независимый скрипт, не код backend), правила requirements/system/credit.md",
+  "cases": [
+    {
+      "id": "31-days-january",
+      "input": {
+        "balance": "1200000",
+        "rates": [
+          {
+            "start": "2026-01-15",
+            "annual_rate": "12"
+          }
+        ],
+        "start": "2026-01-15",
+        "end": "2026-02-15",
+        "day_count": "actual"
+      },
+      "expected": {
+        "days": 31,
+        "interest": "12230.14"
+      }
+    },
+    {
+      "id": "28-days-february",
+      "input": {
+        "balance": "1172372.97",
+        "rates": [
+          {
+            "start": "2026-01-15",
+            "annual_rate": "12"
+          }
+        ],
+        "start": "2026-02-15",
+        "end": "2026-03-15",
+        "day_count": "actual"
+      },
+      "expected": {
+        "days": 28,
+        "interest": "10792.26"
+      }
+    },
+    {
+      "id": "leap-new-year-actual",
+      "input": {
+        "balance": "1000000",
+        "rates": [
+          {
+            "start": "2026-01-15",
+            "annual_rate": "12"
+          }
+        ],
+        "start": "2027-12-15",
+        "end": "2028-01-15",
+        "day_count": "actual"
+      },
+      "expected": {
+        "days": 31,
+        "interest": "10178.31"
+      }
+    },
+    {
+      "id": "leap-new-year-365",
+      "input": {
+        "balance": "1000000",
+        "rates": [
+          {
+            "start": "2026-01-15",
+            "annual_rate": "12"
+          }
+        ],
+        "start": "2027-12-15",
+        "end": "2028-01-15",
+        "day_count": "365"
+      },
+      "expected": {
+        "days": 31,
+        "interest": "10191.78"
+      }
+    },
+    {
+      "id": "leap-february-actual",
+      "input": {
+        "balance": "1000000",
+        "rates": [
+          {
+            "start": "2026-01-15",
+            "annual_rate": "12"
+          }
+        ],
+        "start": "2028-02-15",
+        "end": "2028-03-15",
+        "day_count": "actual"
+      },
+      "expected": {
+        "days": 29,
+        "interest": "9508.20"
+      }
+    },
+    {
+      "id": "leap-february-365",
+      "input": {
+        "balance": "1000000",
+        "rates": [
+          {
+            "start": "2026-01-15",
+            "annual_rate": "12"
+          }
+        ],
+        "start": "2028-02-15",
+        "end": "2028-03-15",
+        "day_count": "365"
+      },
+      "expected": {
+        "days": 29,
+        "interest": "9534.25"
+      }
+    },
+    {
+      "id": "rate-change-inside-period",
+      "input": {
+        "balance": "877483.21",
+        "rates": [
+          {
+            "start": "2026-01-15",
+            "annual_rate": "12"
+          },
+          {
+            "start": "2027-01-01",
+            "annual_rate": "6"
+          }
+        ],
+        "start": "2026-12-15",
+        "end": "2027-01-15",
+        "day_count": "actual"
+      },
+      "expected": {
+        "days": 31,
+        "interest": "6779.46"
+      }
+    },
+    {
+      "id": "zero-rate",
+      "input": {
+        "balance": "500000",
+        "rates": [
+          {
+            "start": "2026-01-15",
+            "annual_rate": "0"
+          }
+        ],
+        "start": "2026-01-15",
+        "end": "2026-02-15",
+        "day_count": "actual"
+      },
+      "expected": {
+        "days": 31,
+        "interest": "0.00"
+      }
+    }
+  ]
+}
