@@ -1,15 +1,101 @@
 name: Bug
-description: Create a Bug
+description: Система ведёт себя не так, как описано в требованиях
+title: "[Компонент] что не так — при каком условии"
 labels: ["bug"]
 body:
-  - type: textarea
-    id: steps
+  - type: markdown
     attributes:
-      label: Steps to reproduce
+      value: |
+        Репозиторий публичный: **никаких реальных данных** — сумм, дат, номеров договоров. Только учебный пример из требований.
+  - type: input
+    id: environment
+    attributes:
+      label: Окружение
+      description: ветка и коммит, где запускали, APP_ENV
+      placeholder: "main @ e6386ab · локально, uvicorn · APP_ENV=test"
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Компонент
+      options:
+        - кредит — расчёт (ядро)
+        - кредит — API
+        - зарплата — расчёт (ядро)
+        - зарплата — API
+        - хранилище
+        - конфигурация и запуск
+        - CI / dev-окружение
+        - документация
     validations:
       required: true
   - type: dropdown
     id: severity
     attributes:
       label: Severity
-      options: [Critical, major, minor, trivial]
+      description: |
+        Critical — неверные деньги или потеря данных без предупреждения ·
+        Major — 500 или сценарий не работает ·
+        Minor — есть обход или неудобно ·
+        Trivial — косметика
+      options: [Critical, Major, Minor, Trivial]
+    validations:
+      required: true
+  - type: dropdown
+    id: reproducibility
+    attributes:
+      label: Воспроизводится
+      options: [всегда, иногда, один раз, не воспроизводил (вывод из кода)]
+    validations:
+      required: true
+  - type: textarea
+    id: preconditions
+    attributes:
+      label: Предусловия
+      placeholder: "CREDIT_DATA_PATH указывает на data/credit.example.json"
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги
+      description: точный запрос — метод, путь, тело
+      placeholder: |
+        1. POST /api/v1/calculator/schedule с телом учебного кредита, где "months": 100000
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемый результат
+      description: со ссылкой на раздел требований
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Фактический результат
+      description: статус, тело ответа, фрагмент лога
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Почему это важно
+  - type: textarea
+    id: notes
+    attributes:
+      label: Заметки для разработчика
+      description: необязательно — догадка о причине
+  - type: textarea
+    id: links
+    attributes:
+      label: Связи
+      placeholder: "Требование: … · Тест: … (xfail) · Похожие: #N"
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Данные
+      options:
+        - label: В описании нет реальных данных
+          required: true
