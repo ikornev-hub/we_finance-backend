@@ -54,3 +54,12 @@ class ScheduleRow:
     interest: Decimal
     balance: Decimal
     fee: Decimal = Decimal("0.00")
+
+
+@dataclass(frozen=True)
+class Prepayment:
+    """ЧДП: дата, сумма, режим"""
+
+    date: date
+    amount: Decimal
+    mode: PrepaymentMode

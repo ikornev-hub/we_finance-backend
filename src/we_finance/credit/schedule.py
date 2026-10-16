@@ -1,10 +1,18 @@
 import calendar
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from we_finance.credit.calendar_ru import is_business_day
-from we_finance.credit.models import DayCount, Loan, RatePeriod, ScheduleRow
+from we_finance.credit.models import (
+    DayCount,
+    Loan,
+    Prepayment,
+    PrepaymentMode,
+    RatePeriod,
+    ScheduleRow,
+)
 
 CENT = Decimal("0.01")
 
@@ -82,34 +90,82 @@ def payment_dates(first_payment_date: date, months: int, weekend_shift: bool) ->
     return dates
 
 
-def build_schedule(loan: Loan) -> list[ScheduleRow]:
-    """График платежей от выдачи до закрытия (требования 2.4).
+@dataclass
+class _Plan:
+    """Изменяемое состояние графика между платежами: что меняют ЧДП."""
+
+    balance: Decimal  # остаток основного долга
+    payment: Decimal  # текущий стандартный платёж (меняется при «уменьшить платёж»)
+    last_number: int | None  # номер последнего платежа; None — закроется сам («сократить срок»)
+
+
+def remaining_payments(
+    loan: Loan, balance: Decimal, payment: Decimal, start: date, future_dates: Sequence[date]
+) -> int:
+    """Сколько платежей нужно, чтобы погасить balance платежом payment, начиная после start."""
+    count = 0
+    previous_date = start
+    for pay_date in future_dates:
+        count += 1
+        interest = interest_for_period(balance, loan.rates, previous_date, pay_date, loan.day_count)
+        if balance + interest + loan.monthly_fee <= payment:
+            break
+        balance -= payment - interest - loan.monthly_fee
+        previous_date = pay_date
+    return count
+
+
+def _apply_prepayment(
+    loan: Loan, plan: _Plan, prepayment: Prepayment, number: int, future_dates: Sequence[date]
+) -> None:
+    """ЧДП после платежа номер number: уменьшает остаток и пересчитывает план (требования 2.6)."""
+    if prepayment.mode == PrepaymentMode.REDUCE_PAYMENT and plan.last_number is None:
+        # после «сократить срок» план неизвестен: считаем его ДО вычета этого ЧДП
+        plan.last_number = number + remaining_payments(
+            loan, plan.balance, plan.payment, prepayment.date, future_dates
+        )
+
+    plan.balance -= min(prepayment.amount, plan.balance)
+    if plan.balance == 0:
+        return
+
+    if prepayment.mode == PrepaymentMode.REDUCE_PAYMENT:
+        remaining = plan.last_number - number
+        rate = rate_on(loan.rates, prepayment.date)
+        plan.payment = annuity_payment(plan.balance, rate, remaining) + loan.monthly_fee
+    else:
+        plan.last_number = None
+
+
+def build_schedule(loan: Loan, prepayments: Sequence[Prepayment] = ()) -> list[ScheduleRow]:
+    """График платежей от выдачи до закрытия с учётом ЧДП (требования 2.4, 2.6).
 
     Платёж банка включает комиссию: платёж = в долг + проценты + комиссия.
     Последний платёж (по сроку или раньше, если долг уже помещается в платёж) закрывает остаток.
+    ЧДП в дату платежа применяется после обычного платежа.
     """
     dates = payment_dates(loan.first_payment_date, loan.months, loan.weekend_shift)
     rows: list[ScheduleRow] = []
-    balance = loan.principal
+    plan = _Plan(balance=loan.principal, payment=loan.payment, last_number=loan.months)
     previous_date = loan.issue_date
     accrued_total = Decimal("0")
     interest_paid = Decimal("0")
 
     for number, pay_date in enumerate(dates, start=1):
         accrued_total += interest_for_period(
-            balance, loan.rates, previous_date, pay_date, loan.day_count
+            plan.balance, loan.rates, previous_date, pay_date, loan.day_count
         )
         interest = accrued_total.quantize(CENT, rounding=ROUND_HALF_UP) - interest_paid
         interest_paid += interest
-        closing = balance + interest + loan.monthly_fee
+        closing = plan.balance + interest + loan.monthly_fee
 
-        if number == loan.months or closing <= loan.payment:
+        if number == plan.last_number or closing <= plan.payment:
             payment = closing
         else:
-            payment = loan.payment
+            payment = plan.payment
 
         principal_part = payment - interest - loan.monthly_fee
-        balance -= principal_part
+        plan.balance -= principal_part
         rows.append(
             ScheduleRow(
                 number=number,
@@ -117,11 +173,14 @@ def build_schedule(loan: Loan) -> list[ScheduleRow]:
                 payment=payment,
                 principal=principal_part,
                 interest=interest,
-                balance=balance,
+                balance=plan.balance,
                 fee=loan.monthly_fee,
             )
         )
-        if balance == 0:
+        for prepayment in prepayments:
+            if prepayment.date == pay_date:
+                _apply_prepayment(loan, plan, prepayment, number, dates[number:])
+        if plan.balance == 0:
             break
         previous_date = pay_date
 
