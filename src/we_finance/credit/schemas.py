@@ -160,3 +160,39 @@ class CalculationOut(BaseModel):
     schedule: list[ScheduleItemOut]
     history: list[HistoryEntryOut]
     warnings: list[WarningOut]
+
+
+# ---------- ресурсы /loans ----------
+
+
+class LoanCreateIn(LoanIn):
+    """Новый кредит: параметры договора и название (сценарий С1)."""
+
+    name: str = Field(min_length=1, max_length=100)
+
+
+class LoanSummaryOut(BaseModel):
+    """Кредит в списке (сценарий С2)."""
+
+    id: str
+    name: str
+    principal: Decimal
+    balance: Decimal
+    close_date: date
+
+
+class LoanDetailOut(CalculationOut):
+    """Кредит целиком: id, название и всё, что считает калькулятор (сценарии С3–С5, С7)."""
+
+    id: str
+    name: str
+
+
+class PreviewOut(BaseModel):
+    """Прогноз ЧДП: было и стало (сценарий С6). Ничего не сохраняется."""
+
+    before: LoanStateOut
+    after: LoanStateOut
+    interest_saved: Decimal  # экономия именно этого ЧДП
+    months_saved: int
+    warnings: list[WarningOut]
