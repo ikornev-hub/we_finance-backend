@@ -1,6 +1,6 @@
 *.xlsm
 *.xlsx
-
+scratch/
 __pycache__
 
 .venv/
