@@ -72,3 +72,46 @@ class Prepayment:
     date: date
     amount: Decimal
     mode: PrepaymentMode
+
+
+class EntryKind(StrEnum):
+    """Тип записи в истории платежей."""
+
+    REGULAR = "regular"
+    PREPAYMENT = "prepayment"
+
+
+@dataclass(frozen=True)
+class HistoryEntry:
+    """Запись истории: обычный платёж или ЧДП (требования 2.8)."""
+
+    date: date
+    kind: EntryKind
+    amount: Decimal  # сколько списано
+    principal: Decimal  # из них в основной долг
+    interest: Decimal  # из них проценты (у ЧДП — 0)
+    fee: Decimal  # из них комиссия (у ЧДП — 0)
+    balance: Decimal  # остаток долга после записи
+
+
+@dataclass(frozen=True)
+class LoanState:
+    """Состояние кредита на дату (требования 2.7)."""
+
+    as_of: date
+    balance: Decimal
+    next_payment: ScheduleRow | None  # None — кредит закрыт
+    close_date: date
+    last_payment: Decimal
+    payments_left: int
+
+
+@dataclass(frozen=True)
+class LoanOverview:
+    """Стартовое и актуальное состояние плюс итоги ЧДП (сценарий С3, требования 2.9)."""
+
+    start: LoanState
+    actual: LoanState
+    prepaid_total: Decimal
+    interest_saved: Decimal
+    months_saved: int

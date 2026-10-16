@@ -1,12 +1,14 @@
 import calendar
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from we_finance.credit.calendar_ru import is_business_day
 from we_finance.credit.models import (
     DayCount,
+    EntryKind,
+    HistoryEntry,
     Loan,
     PaymentDayChange,
     Prepayment,
@@ -117,6 +119,7 @@ class _Plan:
     balance: Decimal  # остаток основного долга
     payment: Decimal  # текущий стандартный платёж (меняется при «уменьшить платёж»)
     last_number: int | None  # номер последнего платежа; None — закроется сам («сократить срок»)
+    applied: list[HistoryEntry] = field(default_factory=list)  # применённые ЧДП
 
 
 def remaining_payments(
@@ -145,7 +148,19 @@ def _apply_prepayment(
             loan, plan.balance, plan.payment, prepayment.date, future_dates
         )
 
-    plan.balance -= min(prepayment.amount, plan.balance)
+    amount = min(prepayment.amount, plan.balance)
+    plan.balance -= amount
+    plan.applied.append(
+        HistoryEntry(
+            date=prepayment.date,
+            kind=EntryKind.PREPAYMENT,
+            amount=amount,
+            principal=amount,
+            interest=Decimal("0.00"),
+            fee=Decimal("0.00"),
+            balance=plan.balance,
+        )
+    )
     if plan.balance == 0:
         return
 
@@ -184,7 +199,15 @@ def _accrue_period(
 
 
 def build_schedule(loan: Loan, prepayments: Sequence[Prepayment] = ()) -> list[ScheduleRow]:
-    """График платежей от выдачи до закрытия с учётом ЧДП (требования 2.4, 2.6).
+    """График платежей от выдачи до закрытия с учётом ЧДП (требования 2.4, 2.6)."""
+    rows, _ = calculate(loan, prepayments)
+    return rows
+
+
+def calculate(
+    loan: Loan, prepayments: Sequence[Prepayment] = ()
+) -> tuple[list[ScheduleRow], list[HistoryEntry]]:
+    """График и применённые ЧДП (требования 2.4, 2.6).
 
     Платёж банка включает комиссию: платёж = в долг + проценты + комиссия.
     Последний платёж (по сроку или раньше, если долг уже помещается в платёж) закрывает остаток.
@@ -229,4 +252,4 @@ def build_schedule(loan: Loan, prepayments: Sequence[Prepayment] = ()) -> list[S
         if plan.balance == 0:
             break
 
-    return rows
+    return rows, plan.applied
