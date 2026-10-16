@@ -2,11 +2,19 @@
 
 from dataclasses import asdict
 from datetime import date
+from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from we_finance.credit.models import Loan, PaymentDayChange, Prepayment, RatePeriod
+from we_finance.credit.models import (
+    HistoryEntry,
+    Loan,
+    PaymentDayChange,
+    Prepayment,
+    RatePeriod,
+    ScheduleRow,
+)
 from we_finance.credit.schedule import build_schedule, calculate
 from we_finance.credit.schemas import (
     CalculationIn,
@@ -48,6 +56,17 @@ def _to_loan(loan_in: LoanIn) -> Loan:
     )
 
 
+def _unused_prepayment(
+    prepayments: list[Prepayment], applied: list[HistoryEntry], rows: list[ScheduleRow]
+) -> Decimal:
+    """Сколько из внесённых ЧДП не понадобилось: сверх долга, процентов и комиссии на дату."""
+    used = sum((entry.amount for entry in applied), Decimal("0"))
+    closed_by_prepayment = applied and applied[-1].balance == 0
+    if closed_by_prepayment and rows[-1].date == applied[-1].date:
+        used += rows[-1].interest + rows[-1].fee  # погашение в тот же день покрыло проценты
+    return sum((p.amount for p in prepayments), Decimal("0")) - used
+
+
 @router.post(
     "/schedule",
     summary="Calculate payment schedule",
@@ -85,8 +104,7 @@ def calculate_loan(
         )
 
     overview = loan_overview(loan, prepayments, as_of)
-    requested = sum(p.amount for p in prepayments)
-    excess = requested - sum(entry.amount for entry in applied)
+    excess = _unused_prepayment(prepayments, applied, rows)
     warnings = []
     if excess > 0:
         warnings.append(

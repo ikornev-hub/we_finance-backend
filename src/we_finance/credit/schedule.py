@@ -224,6 +224,10 @@ def calculate(
 
     for number, pay_date in enumerate(dates, start=1):
         accrued_total += _accrue_period(loan, plan, ordered, dates, number)
+        if plan.balance == 0:
+            # кредит закрыт ЧДП внутри периода: проценты по дату погашения и комиссия
+            # платятся в тот же день одной суммой (так считает банк, 2026-10-16)
+            pay_date = plan.applied[-1].date
         interest = accrued_total.quantize(CENT, rounding=ROUND_HALF_UP) - interest_paid
         interest_paid += interest
         closing = plan.balance + interest + loan.monthly_fee
