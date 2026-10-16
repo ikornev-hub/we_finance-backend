@@ -1,0 +1,30 @@
+[
+  {
+    "loan": {
+      "id": "teaching",
+      "name": "Учебный кредит (требования, пример)",
+      "principal": "1200000.00",
+      "rates": [
+        {
+          "start": "2026-01-15",
+          "annual_rate": "12"
+        }
+      ],
+      "payment": "39857.17",
+      "months": 36,
+      "issue_date": "2026-01-15",
+      "first_payment_date": "2026-02-15",
+      "day_count": "actual",
+      "weekend_shift": false,
+      "monthly_fee": "0.00",
+      "payment_day_changes": []
+    },
+    "prepayments": [
+      {
+        "date": "2026-07-15",
+        "amount": "200000.00",
+        "mode": "reduce_term"
+      }
+    ]
+  }
+]

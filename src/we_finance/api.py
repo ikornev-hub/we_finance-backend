@@ -1,14 +1,29 @@
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 
 from we_finance import __version__
+from we_finance.credit.service import CreditError, LoanNotFoundError
 from we_finance.db import check_db
-from we_finance.routers import credit, money
+from we_finance.routers import calculator, loans, money
 from we_finance.schemas import HealthResponse, VersionResponse
 from we_finance.settings import get_app_env
 
 app = FastAPI(title="We Finance", version=__version__)
 app.include_router(money.router, prefix="/api/v1")
-app.include_router(credit.router, prefix="/api/v1")
+app.include_router(calculator.router, prefix="/api/v1")
+app.include_router(loans.router, prefix="/api/v1")
+
+
+@app.exception_handler(CreditError)
+def credit_error_handler(_request: Request, exc: CreditError) -> JSONResponse:
+    """Ввод противоречит кредиту → 422 с понятным текстом, а не 500."""
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
+@app.exception_handler(LoanNotFoundError)
+def loan_not_found_handler(_request: Request, exc: LoanNotFoundError) -> JSONResponse:
+    """Нет такого кредита → 404."""
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
 
 
 @app.get("/health", tags=["service"], summary="healthchecker", description="Get health app status")
