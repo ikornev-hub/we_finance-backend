@@ -30,3 +30,15 @@ class Absence:
     kind: AbsenceKind
     start: date
     end: date
+
+
+@dataclass(frozen=True)
+class MonthAccrual:
+    """Статистика за месяц"""
+
+    year: int
+    month: int
+    workdays: int
+    worked: int
+    salary: Decimal
+    meal: Decimal
