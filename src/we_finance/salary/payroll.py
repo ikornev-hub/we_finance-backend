@@ -1,11 +1,11 @@
 """Получение данных на конкретный день"""
 
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from we_finance.salary.models import Absence, MonthAccrual, SalaryTerms
-from we_finance.salary.workdays import business_days, month_end
+from we_finance.salary.workdays import business_days, month_end, previous_business_day
 
 
 def terms_on(terms: Sequence[SalaryTerms], day: date) -> SalaryTerms:
@@ -56,3 +56,36 @@ def accrue_month(
     )
     accrue_meal = meal_for(complete_days, terms).quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
     return MonthAccrual(year, month, count_work_day, len(complete_days), accrue_job, accrue_meal)
+
+
+def remainder_date(year: int, month: int) -> date:
+    """Вычислить дату выплаты остатка"""
+    result = month_end(year, month) + timedelta(days=1)
+    result = result.replace(day=10)
+    return previous_business_day(result)
+
+
+def advance_date(year: int, month: int) -> date:
+    """Вычислить дату выплаты аванса"""
+    return previous_business_day(date(year, month, 25))
+
+
+def split_salary(
+    year: int, month: int, terms: Sequence[SalaryTerms], absences: Sequence[Absence]
+) -> tuple[Decimal, Decimal]:
+    """Вычисление аванса и остатка за месяц"""
+    start_month = date(year, month, 1)
+    mid_month = date(year, month, 15)
+    end_month = month_end(year, month)
+
+    month_workdays = len(business_days(start_month, end_month))
+    first_half_days = worked_days(start_month, mid_month, absences)
+
+    advance = salary_for(first_half_days, terms, month_workdays).quantize(
+        Decimal("0.00"), rounding=ROUND_HALF_UP
+    )
+
+    accrual = accrue_month(year, month, terms, absences)
+    remainder = accrual.salary + accrual.meal - advance
+
+    return advance, remainder

@@ -17,3 +17,11 @@ def business_days(start: date, end: date) -> list[date]:
             working_day.append(start)
         start += timedelta(days=1)
     return working_day
+
+
+def previous_business_day(day: date) -> date:
+    """Тот же день, если рабочий; иначе ближайший предыдущий рабочий"""
+    result = day
+    while not is_business_day(result):
+        result -= timedelta(days=1)
+    return result
