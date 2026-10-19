@@ -124,6 +124,7 @@ class PaymentOut(BaseModel):
     gross: Decimal
     tax: Decimal
     net: Decimal
+    received: bool
 
 
 class MonthTotalOut(BaseModel):

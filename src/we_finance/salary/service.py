@@ -1,11 +1,19 @@
 """Сервис зарплаты: сценарии поверх ядра и хранилища. Про HTTP не знает."""
 
-from dataclasses import replace
+from dataclasses import asdict, replace
+from datetime import date
+from decimal import Decimal
 
 from we_finance.salary.models import Absence, HistoryMonth, Payment, SalaryProfile, SalaryTerms
 from we_finance.salary.repository import SalaryRepository
-from we_finance.salary.schemas import SalaryProfileIn
-from we_finance.salary.year import year_report
+from we_finance.salary.schemas import (
+    MonthTotalOut,
+    PaymentOut,
+    SalaryCalculationIn,
+    SalaryProfileIn,
+    YearReportOut,
+)
+from we_finance.salary.year import month_totals, year_report
 
 
 class SalaryError(ValueError):
@@ -77,4 +85,27 @@ def to_profile(profile_in: SalaryProfileIn) -> SalaryProfile:
             )
             for h in profile_in.history
         ),
+    )
+
+
+def calculate(request: SalaryCalculationIn, as_of: date) -> YearReportOut:
+    """Выплаты за год по присланному профилю, без сохранения; received — на дату as_of."""
+    profile = to_profile(request.profile)
+    try:
+        payments = year_report(
+            year=request.year,
+            terms=profile.terms,
+            absences=profile.absences,
+            history=profile.history,
+            stage_start=profile.stage_start,
+        )
+    except ValueError as error:
+        raise SalaryError(str(error)) from error
+    return YearReportOut(
+        year=request.year,
+        payments=[PaymentOut(**asdict(p), net=p.net, received=p.date <= as_of) for p in payments],
+        months=[MonthTotalOut.model_validate(m) for m in month_totals(payments)],
+        gross=sum((p.gross for p in payments), Decimal("0")),
+        tax=sum((p.tax for p in payments), Decimal("0")),
+        net=sum((p.net for p in payments), Decimal("0")),
     )
