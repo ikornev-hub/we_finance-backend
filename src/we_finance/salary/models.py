@@ -42,3 +42,40 @@ class MonthAccrual:
     worked: int
     salary: Decimal
     meal: Decimal
+
+
+class PaymentKind(StrEnum):
+    """Вид выплаты."""
+
+    ADVANCE = "advance"
+    REMAINDER = "remainder"
+
+
+@dataclass(frozen=True)
+class Payment:
+    """Выплата: когда, что, за какой месяц, начислено и удержано."""
+
+    date: date
+    kind: PaymentKind
+    for_month: int
+    gross: Decimal
+    tax: Decimal = Decimal("0")
+
+    @property
+    def net(self) -> Decimal:
+        """На руки: начислено минус налог."""
+        return self.gross - self.tax
+
+
+@dataclass(frozen=True)
+class MonthTotal:
+    """Итог месяца: начислено и удержано по всем выплатам за этот месяц."""
+
+    month: int
+    gross: Decimal
+    tax: Decimal = Decimal("0")
+
+    @property
+    def net(self) -> Decimal:
+        """На руки: начислено минус налог."""
+        return self.gross - self.tax
