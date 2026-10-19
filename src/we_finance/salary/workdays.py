@@ -25,3 +25,12 @@ def previous_business_day(day: date) -> date:
     while not is_business_day(result):
         result -= timedelta(days=1)
     return result
+
+
+def add_business_days(day: date, count: int) -> date:
+    """Дата через count рабочих дней после day (сам day не считается)."""
+    while count > 0:
+        day += timedelta(days=1)
+        if is_business_day(day):
+            count -= 1
+    return day

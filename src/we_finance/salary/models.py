@@ -50,6 +50,8 @@ class PaymentKind(StrEnum):
     ADVANCE = "advance"
     REMAINDER = "remainder"
     VACATION = "vacation"
+    SICK_EMPLOYER = "sick_employer"
+    SICK_FUND = "sick_fund"
 
 
 @dataclass(frozen=True)
@@ -91,3 +93,14 @@ class HistoryMonth:
     salary: Decimal  # оклад, начисленный за месяц
     vacation_pay: Decimal = Decimal("0")  # отпускные, выплаченные в этом месяце
     excluded_days: int = 0  # календарные дни месяца в отпуске, больничном, без оплаты
+
+
+@dataclass(frozen=True)
+class SickPay:
+    """Расчет больничного"""
+
+    average: Decimal
+    daily: Decimal
+    days: int
+    employer: Decimal
+    fund: Decimal
