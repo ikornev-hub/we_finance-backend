@@ -28,3 +28,11 @@ def get_credit_data_path() -> Path:
     if not path:
         raise ConfigError("CREDIT_DATA_PATH не задан")
     return Path(path)
+
+
+def get_salary_data_path() -> Path:
+    """Файл с профилем зарплаты (JSON). Реальные данные — только в локальном файле из .gitignore."""
+    path = os.environ.get("SALARY_DATA_PATH")
+    if not path:
+        raise ConfigError("SALARY_DATA_PATH не задан")
+    return Path(path)
