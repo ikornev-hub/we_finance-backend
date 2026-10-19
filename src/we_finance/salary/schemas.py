@@ -147,3 +147,22 @@ class YearReportOut(BaseModel):
     gross: Decimal
     tax: Decimal
     net: Decimal
+
+
+class MonthChangeOut(BaseModel):
+    """Месяц до и после изменения условий."""
+
+    month: int
+    net_before: Decimal
+    net_after: Decimal
+    net_change: Decimal
+
+
+class WhatIfOut(BaseModel):
+    """Что будет с годом, если с даты поменяются условия: до, после, изменение."""
+
+    year: int
+    net_before: Decimal
+    net_after: Decimal
+    net_change: Decimal
+    months: list[MonthChangeOut]

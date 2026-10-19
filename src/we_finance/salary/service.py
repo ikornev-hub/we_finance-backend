@@ -7,10 +7,14 @@ from decimal import Decimal
 from we_finance.salary.models import Absence, HistoryMonth, Payment, SalaryProfile, SalaryTerms
 from we_finance.salary.repository import SalaryRepository
 from we_finance.salary.schemas import (
+    AbsenceIn,
+    MonthChangeOut,
     MonthTotalOut,
     PaymentOut,
     SalaryCalculationIn,
     SalaryProfileIn,
+    SalaryTermsIn,
+    WhatIfOut,
     YearReportOut,
 )
 from we_finance.salary.year import month_totals, year_report
@@ -88,12 +92,11 @@ def to_profile(profile_in: SalaryProfileIn) -> SalaryProfile:
     )
 
 
-def calculate(request: SalaryCalculationIn, as_of: date) -> YearReportOut:
-    """Выплаты за год по присланному профилю, без сохранения; received — на дату as_of."""
-    profile = to_profile(request.profile)
+def _report(profile: SalaryProfile, target_year: int, as_of: date) -> YearReportOut:
+    """Отчёт за год по профилю ядра; received — на дату as_of."""
     try:
         payments = year_report(
-            year=request.year,
+            year=target_year,
             terms=profile.terms,
             absences=profile.absences,
             history=profile.history,
@@ -102,10 +105,62 @@ def calculate(request: SalaryCalculationIn, as_of: date) -> YearReportOut:
     except ValueError as error:
         raise SalaryError(str(error)) from error
     return YearReportOut(
-        year=request.year,
+        year=target_year,
         payments=[PaymentOut(**asdict(p), net=p.net, received=p.date <= as_of) for p in payments],
         months=[MonthTotalOut.model_validate(m) for m in month_totals(payments)],
         gross=sum((p.gross for p in payments), Decimal("0")),
         tax=sum((p.tax for p in payments), Decimal("0")),
         net=sum((p.net for p in payments), Decimal("0")),
     )
+
+
+def calculate(request: SalaryCalculationIn, as_of: date) -> YearReportOut:
+    """Выплаты за год по присланному профилю, без сохранения."""
+    return _report(to_profile(request.profile), request.year, as_of)
+
+
+def year_out(repo: SalaryRepository, target_year: int, as_of: date) -> YearReportOut:
+    """Отчёт за год по сохранённому профилю."""
+    return _report(get_profile(repo), target_year, as_of)
+
+
+def to_terms(terms_in: SalaryTermsIn) -> SalaryTerms:
+    """Схема условий → условия ядра."""
+    return SalaryTerms(
+        start=terms_in.start, salary=terms_in.salary, meal_per_day=terms_in.meal_per_day
+    )
+
+
+def what_if(repo: SalaryRepository, target_year: int, terms_in: SalaryTermsIn) -> WhatIfOut:
+    """Год по сохранённому профилю и по варианту с новыми условиями. Ничего не сохраняет."""
+    profile = get_profile(repo)
+    last = profile.terms[-1].start
+    if terms_in.start <= last:
+        raise SalaryError(
+            f"Новые условия должны начинаться позже {last}, а начинаются {terms_in.start}"
+        )
+    scenario = replace(profile, terms=(*profile.terms, to_terms(terms_in)))
+    before = _report(profile, target_year, terms_in.start)
+    after = _report(scenario, target_year, terms_in.start)
+    return WhatIfOut(
+        year=target_year,
+        net_before=before.net,
+        net_after=after.net,
+        net_change=after.net - before.net,
+        months=[
+            MonthChangeOut(
+                month=b.month, net_before=b.net, net_after=a.net, net_change=a.net - b.net
+            )
+            for b, a in zip(before.months, after.months, strict=True)
+        ],
+    )
+
+
+def to_absence(absence_in: AbsenceIn) -> Absence:
+    """Схема отсутствия → отсутствие ядра."""
+    return Absence(kind=absence_in.kind, start=absence_in.start, end=absence_in.end)
+
+
+def to_profile_in(profile: SalaryProfile) -> SalaryProfileIn:
+    """Профиль ядра → схема для ответа API (обратно к to_profile)."""
+    return SalaryProfileIn.model_validate(asdict(profile))
