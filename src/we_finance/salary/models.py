@@ -49,6 +49,7 @@ class PaymentKind(StrEnum):
 
     ADVANCE = "advance"
     REMAINDER = "remainder"
+    VACATION = "vacation"
 
 
 @dataclass(frozen=True)
@@ -79,3 +80,14 @@ class MonthTotal:
     def net(self) -> Decimal:
         """На руки: начислено минус налог."""
         return self.gross - self.tax
+
+
+@dataclass(frozen=True)
+class HistoryMonth:
+    """Помесячная история выплат"""
+
+    year: int
+    month: int
+    salary: Decimal  # оклад, начисленный за месяц
+    vacation_pay: Decimal = Decimal("0")  # отпускные, выплаченные в этом месяце
+    excluded_days: int = 0  # календарные дни месяца в отпуске, больничном, без оплаты

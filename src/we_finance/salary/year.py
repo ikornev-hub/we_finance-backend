@@ -4,9 +4,18 @@ from collections.abc import Sequence
 from dataclasses import replace
 from decimal import Decimal
 
-from we_finance.salary.models import Absence, MonthTotal, Payment, PaymentKind, SalaryTerms
+from we_finance.salary.models import (
+    Absence,
+    AbsenceKind,
+    HistoryMonth,
+    MonthTotal,
+    Payment,
+    PaymentKind,
+    SalaryTerms,
+)
 from we_finance.salary.payroll import advance_date, remainder_date, split_salary
 from we_finance.salary.tax import withhold
+from we_finance.salary.vacation import month_history, vacation_pay, vacation_pay_date
 
 
 def salary_payments(
@@ -42,9 +51,25 @@ def month_totals(payments: Sequence[Payment]) -> list[MonthTotal]:
 
 
 def year_report(
-    year: int, terms: Sequence[SalaryTerms], absences: Sequence[Absence]
+    year: int,
+    terms: Sequence[SalaryTerms],
+    absences: Sequence[Absence],
+    history: Sequence[HistoryMonth],
 ) -> list[Payment]:
     """Все выплаты года по датам, у каждой — НДФЛ и сумма на руки."""
-    accrual_without_tax = salary_payments(year, terms, absences)
-    accrual_with_tax = with_tax(accrual_without_tax)
-    return accrual_with_tax
+    payments = salary_payments(year, terms, absences)
+
+    computed = [month_history(year, m, terms, absences) for m in range(1, 13)]
+    full_history = [*history, *computed]
+
+    for absence in absences:
+        if absence.kind == AbsenceKind.VACATION and absence.start.year == year:
+            payments.append(
+                Payment(
+                    vacation_pay_date(absence),
+                    PaymentKind.VACATION,
+                    absence.start.month,
+                    vacation_pay(full_history, absence),
+                )
+            )
+    return with_tax(payments)
