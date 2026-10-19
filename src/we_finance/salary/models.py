@@ -104,3 +104,13 @@ class SickPay:
     days: int
     employer: Decimal
     fund: Decimal
+
+
+@dataclass(frozen=True)
+class SalaryProfile:
+    """Всё, что нужно для расчёта зарплаты одного человека."""
+
+    terms: tuple[SalaryTerms, ...]
+    stage_start: date
+    absences: tuple[Absence, ...] = ()
+    history: tuple[HistoryMonth, ...] = ()
