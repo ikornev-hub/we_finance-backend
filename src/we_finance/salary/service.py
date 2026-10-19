@@ -2,8 +2,9 @@
 
 from dataclasses import replace
 
-from we_finance.salary.models import Absence, Payment, SalaryProfile
+from we_finance.salary.models import Absence, HistoryMonth, Payment, SalaryProfile, SalaryTerms
 from we_finance.salary.repository import SalaryRepository
+from we_finance.salary.schemas import SalaryProfileIn
 from we_finance.salary.year import year_report
 
 
@@ -55,3 +56,25 @@ def add_absence(repo: SalaryRepository, absence: Absence) -> SalaryProfile:
     updated = replace(profile, absences=(*profile.absences, absence))
     repo.save(updated)
     return updated
+
+
+def to_profile(profile_in: SalaryProfileIn) -> SalaryProfile:
+    """Схема API → профиль ядра: списки в кортежи, схемы в dataclass-ы."""
+    return SalaryProfile(
+        terms=tuple(
+            SalaryTerms(start=t.start, salary=t.salary, meal_per_day=t.meal_per_day)
+            for t in profile_in.terms
+        ),
+        stage_start=profile_in.stage_start,
+        absences=tuple(Absence(kind=a.kind, start=a.start, end=a.end) for a in profile_in.absences),
+        history=tuple(
+            HistoryMonth(
+                year=h.year,
+                month=h.month,
+                salary=h.salary,
+                vacation_pay=h.vacation_pay,
+                excluded_days=h.excluded_days,
+            )
+            for h in profile_in.history
+        ),
+    )
