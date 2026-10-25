@@ -1,7 +1,20 @@
-DROP TABLE IF EXISTS loans;
+DROP TABLE IF EXISTS users, rate_periods, loans, payment_day_changes, prepayments;
+
+
+CREATE TABLE users (
+    id text NOT NULL PRIMARY KEY,
+    login text NOT NULL
+        CONSTRAINT users_login_unique UNIQUE
+        CONSTRAINT users_login_not_empty CHECK (login <> ''),
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO users (id, login) VALUES ('u1', 'student');
+
 
 CREATE TABLE loans (
     id text PRIMARY KEY,
+    user_id text NOT NULL REFERENCES users (id),
     name text NOT NULL CONSTRAINT loans_name_length CHECK (
         char_length(name) BETWEEN 1 AND 100
     ),
@@ -29,6 +42,7 @@ CREATE TABLE loans (
 INSERT INTO
     loans (
         id,
+        user_id,
         name,
         principal,
         payment,
@@ -39,6 +53,7 @@ INSERT INTO
     )
 VALUES (
         'teaching',
+        'u1',
         'Credit Example',
         1200000.00,
         39857.17,
@@ -47,3 +62,37 @@ VALUES (
         '2026-02-15',
         false
     );
+
+
+CREATE TABLE rate_periods (
+    loan_id text NOT NULL REFERENCES loans (id),
+    start_date date NOT NULL,
+    annual_rate numeric NOT NULL
+        CONSTRAINT rate_periods_annual_rate_not_negative CHECK (annual_rate >= 0),
+    PRIMARY KEY (loan_id, start_date)
+);
+
+INSERT INTO rate_periods (loan_id, start_date, annual_rate) VALUES ('teaching', '2026-01-15', 12);
+
+
+CREATE TABLE payment_day_changes (
+    loan_id text NOT NULL REFERENCES loans (id),
+    start_date date NOT NULL,
+    day integer NOT NULL
+        CONSTRAINT payment_day_changes_day_in_month CHECK (day BETWEEN 1 AND 31),
+    PRIMARY KEY (loan_id, start_date)
+);
+
+CREATE TABLE prepayments (
+    id text PRIMARY KEY,
+    loan_id text NOT NULL REFERENCES loans (id),
+    prepayment_date date NOT NULL,
+    amount numeric NOT NULL
+        CONSTRAINT prepayments_amount_positive CHECK (amount > 0)
+        CONSTRAINT prepayments_amount_cents CHECK (scale (amount) <= 2),
+    mode text NOT NULL
+        CONSTRAINT prepayments_mode_known CHECK (mode IN ('reduce_term', 'reduce_payment')),
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO prepayments (id, loan_id, prepayment_date, amount, mode) VALUES ('p1', 'teaching', '2026-07-15', 200000.00, 'reduce_term');
