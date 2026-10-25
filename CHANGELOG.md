@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/ikornev-hub/we_finance-backend/compare/v0.3.0...v0.4.0) (2026-10-25)
+
+
+### Features
+
+* loan history is append-only in the database ([#33](https://github.com/ikornev-hub/we_finance-backend/issues/33)) ([fd0e5e2](https://github.com/ikornev-hub/we_finance-backend/commit/fd0e5e2897031358df6b5db6aa6ed80e763c2e24))
+
 ## [0.3.0](https://github.com/ikornev-hub/we_finance-backend/compare/v0.2.0...v0.3.0) (2026-10-25)
 
 
