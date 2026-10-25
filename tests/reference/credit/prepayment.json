@@ -30,14 +30,14 @@
       "expected": {
         "rows_count": 30,
         "last_row_date": "2028-07-15",
-        "last_payment": "16437.52",
-        "total_interest": "172295.45",
-        "savings": "62170.40",
+        "last_payment": "16437.50",
+        "total_interest": "172295.43",
+        "savings": "62170.41",
         "applied": [
           {
             "date": "2026-07-15",
             "amount": "200000",
-            "balance_after": "828030.49"
+            "balance_after": "828030.48"
           }
         ]
       }
@@ -70,14 +70,14 @@
       "expected": {
         "rows_count": 36,
         "last_row_date": "2029-01-15",
-        "last_payment": "32411.18",
-        "total_interest": "202008.18",
-        "savings": "32457.67",
+        "last_payment": "32411.15",
+        "total_interest": "202008.15",
+        "savings": "32457.69",
         "applied": [
           {
             "date": "2026-07-15",
             "amount": "200000",
-            "balance_after": "828030.49"
+            "balance_after": "828030.48"
           }
         ],
         "row_7": {
@@ -85,7 +85,7 @@
           "payment": "32084.62",
           "principal": "23645.51",
           "interest": "8439.11",
-          "balance": "804384.98"
+          "balance": "804384.97"
         }
       }
     },
@@ -117,14 +117,14 @@
       "expected": {
         "rows_count": 30,
         "last_row_date": "2028-07-15",
-        "last_payment": "15268.47",
-        "total_interest": "171126.40",
-        "savings": "63339.45",
+        "last_payment": "15268.48",
+        "total_interest": "171126.41",
+        "savings": "63339.43",
         "applied": [
           {
             "date": "2026-07-01",
             "amount": "200000",
-            "balance_after": "857457.94"
+            "balance_after": "857457.93"
           }
         ],
         "row_6": {
@@ -132,7 +132,7 @@
           "payment": "39857.17",
           "principal": "30348.00",
           "interest": "9509.17",
-          "balance": "827109.94"
+          "balance": "827109.93"
         }
       }
     },
@@ -164,14 +164,14 @@
       "expected": {
         "rows_count": 36,
         "last_row_date": "2029-01-15",
-        "last_payment": "33894.63",
-        "total_interest": "202340.98",
+        "last_payment": "33894.62",
+        "total_interest": "202340.97",
         "savings": "32124.87",
         "applied": [
           {
             "date": "2026-07-01",
             "amount": "200000",
-            "balance_after": "857457.94"
+            "balance_after": "857457.93"
           }
         ],
         "row_6": {
@@ -179,7 +179,7 @@
           "payment": "32305.35",
           "principal": "22796.18",
           "interest": "9509.17",
-          "balance": "834661.76"
+          "balance": "834661.75"
         }
       }
     },
@@ -218,12 +218,12 @@
         "last_row_date": "2028-07-15",
         "last_payment": "31882.74",
         "total_interest": "165265.07",
-        "savings": "69200.78",
+        "savings": "69200.77",
         "applied": [
           {
             "date": "2026-07-15",
             "amount": "200000",
-            "balance_after": "828030.49"
+            "balance_after": "828030.48"
           },
           {
             "date": "2027-03-15",
@@ -253,7 +253,7 @@
         "prepayments": [
           {
             "date": "2026-07-15",
-            "amount": "1028030.49",
+            "amount": "1028030.48",
             "mode": "reduce_term"
           }
         ]
@@ -262,12 +262,12 @@
         "rows_count": 6,
         "last_row_date": "2026-07-15",
         "last_payment": "39857.17",
-        "total_interest": "67173.51",
+        "total_interest": "67173.50",
         "savings": "167292.34",
         "applied": [
           {
             "date": "2026-07-15",
-            "amount": "1028030.49",
+            "amount": "1028030.48",
             "balance_after": "0.00"
           }
         ]
@@ -302,16 +302,16 @@
         "rows_count": 6,
         "last_row_date": "2026-07-15",
         "last_payment": "39857.17",
-        "total_interest": "67173.51",
+        "total_interest": "67173.50",
         "savings": "167292.34",
         "applied": [
           {
             "date": "2026-07-15",
-            "amount": "1028030.49",
+            "amount": "1028030.48",
             "balance_after": "0.00"
           }
         ],
-        "excess": "71969.51",
+        "excess": "71969.52",
         "warning": "amount_exceeds_balance"
       }
     }

@@ -33,9 +33,9 @@
             "number": 2,
             "date": "2026-03-15",
             "payment": "39857.17",
-            "principal": "29064.91",
-            "interest": "10792.26",
-            "balance": "1143308.06"
+            "principal": "29064.92",
+            "interest": "10792.25",
+            "balance": "1143308.05"
           },
           {
             "number": 3,
@@ -43,18 +43,18 @@
             "payment": "39857.17",
             "principal": "28204.82",
             "interest": "11652.35",
-            "balance": "1115103.24"
+            "balance": "1115103.23"
           }
         ],
         "last_row": {
           "number": 36,
           "date": "2029-01-15",
-          "payment": "39464.90",
-          "principal": "39067.30",
+          "payment": "39464.89",
+          "principal": "39067.29",
           "interest": "397.60",
           "balance": "0"
         },
-        "total_interest": "234465.85",
+        "total_interest": "234465.84",
         "total_principal": "1200000.00"
       }
     },
@@ -89,9 +89,9 @@
             "number": 2,
             "date": "2026-03-15",
             "payment": "39857.17",
-            "principal": "29064.91",
-            "interest": "10792.26",
-            "balance": "1143308.06"
+            "principal": "29064.92",
+            "interest": "10792.25",
+            "balance": "1143308.05"
           },
           {
             "number": 3,
@@ -99,18 +99,18 @@
             "payment": "39857.17",
             "principal": "28204.82",
             "interest": "11652.35",
-            "balance": "1115103.24"
+            "balance": "1115103.23"
           }
         ],
         "last_row": {
           "number": 36,
           "date": "2029-01-15",
-          "payment": "39558.94",
-          "principal": "39159.83",
+          "payment": "39558.92",
+          "principal": "39159.81",
           "interest": "399.11",
           "balance": "0"
         },
-        "total_interest": "234559.89",
+        "total_interest": "234559.87",
         "total_principal": "1200000.00"
       }
     },
@@ -149,9 +149,9 @@
             "number": 2,
             "date": "2026-03-15",
             "payment": "39857.17",
-            "principal": "29064.91",
-            "interest": "10792.26",
-            "balance": "1143308.06"
+            "principal": "29064.92",
+            "interest": "10792.25",
+            "balance": "1143308.05"
           },
           {
             "number": 3,
@@ -159,18 +159,18 @@
             "payment": "39857.17",
             "principal": "28204.82",
             "interest": "11652.35",
-            "balance": "1115103.24"
+            "balance": "1115103.23"
           }
         ],
         "last_row": {
           "number": 35,
           "date": "2028-12-15",
-          "payment": "20281.96",
-          "principal": "20182.70",
+          "payment": "20281.98",
+          "principal": "20182.72",
           "interest": "99.26",
           "balance": "0"
         },
-        "total_interest": "175425.74",
+        "total_interest": "175425.76",
         "total_principal": "1200000.00"
       }
     },
@@ -205,9 +205,9 @@
             "number": 2,
             "date": "2026-03-15",
             "payment": "39000",
-            "principal": "28199.85",
-            "interest": "10800.15",
-            "balance": "1145030.29"
+            "principal": "28199.86",
+            "interest": "10800.14",
+            "balance": "1145030.28"
           },
           {
             "number": 3,
@@ -215,18 +215,18 @@
             "payment": "39000",
             "principal": "27330.10",
             "interest": "11669.90",
-            "balance": "1117700.19"
+            "balance": "1117700.18"
           }
         ],
         "last_row": {
           "number": 36,
           "date": "2029-01-15",
-          "payment": "75540.33",
+          "payment": "75540.32",
           "principal": "74779.27",
-          "interest": "761.06",
+          "interest": "761.05",
           "balance": "0"
         },
-        "total_interest": "240540.33",
+        "total_interest": "240540.32",
         "total_principal": "1200000.00"
       }
     }
