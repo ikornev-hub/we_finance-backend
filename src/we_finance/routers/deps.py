@@ -2,9 +2,9 @@
 
 from datetime import date
 
-from we_finance.credit.repository import JsonLoanRepository, LoanRepository
+from we_finance.credit.repository import LoanRepository, PostgresLoanRepository
 from we_finance.salary.repository import JsonSalaryRepository, SalaryRepository
-from we_finance.settings import get_credit_data_path, get_salary_data_path
+from we_finance.settings import get_database_url, get_salary_data_path
 
 
 def get_salary_repository() -> SalaryRepository:
@@ -18,5 +18,5 @@ def get_today() -> date:
 
 
 def get_repository() -> LoanRepository:
-    """Хранилище кредитов: JSON-файл по пути из CREDIT_DATA_PATH."""
-    return JsonLoanRepository(get_credit_data_path())
+    """Хранилище кредитов: Postgres. Пользователь пока один — вход появится в шаге 2.3."""
+    return PostgresLoanRepository(get_database_url(), "u1")

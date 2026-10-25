@@ -20,6 +20,7 @@ repos:
       - id: pylint
         name: pylint
         entry: pylint
+        exclude: ^migrations/
         language: system
         types: [python]
         args:
