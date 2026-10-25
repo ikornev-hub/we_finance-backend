@@ -1,0 +1,202 @@
+{
+  "terms": [
+    {
+      "start": "2025-01-01",
+      "salary": "120000.00",
+      "meal_per_day": "400.00"
+    },
+    {
+      "start": "2026-07-01",
+      "salary": "150000.00",
+      "meal_per_day": "400.00"
+    }
+  ],
+  "stage_start": "2022-03-01",
+  "absences": [
+    {
+      "kind": "unpaid",
+      "start": "2026-03-20",
+      "end": "2026-03-20"
+    },
+    {
+      "kind": "vacation",
+      "start": "2026-07-06",
+      "end": "2026-07-19"
+    },
+    {
+      "kind": "sick",
+      "start": "2026-10-12",
+      "end": "2026-10-16"
+    }
+  ],
+  "history": [
+    {
+      "year": 2024,
+      "month": 1,
+      "salary": "110000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2024,
+      "month": 2,
+      "salary": "110000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2024,
+      "month": 3,
+      "salary": "110000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2024,
+      "month": 4,
+      "salary": "110000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2024,
+      "month": 5,
+      "salary": "110000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2024,
+      "month": 6,
+      "salary": "110000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2024,
+      "month": 7,
+      "salary": "110000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2024,
+      "month": 8,
+      "salary": "110000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2024,
+      "month": 9,
+      "salary": "110000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2024,
+      "month": 10,
+      "salary": "110000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2024,
+      "month": 11,
+      "salary": "110000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2024,
+      "month": 12,
+      "salary": "110000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2025,
+      "month": 1,
+      "salary": "120000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2025,
+      "month": 2,
+      "salary": "120000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2025,
+      "month": 3,
+      "salary": "120000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2025,
+      "month": 4,
+      "salary": "120000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2025,
+      "month": 5,
+      "salary": "120000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2025,
+      "month": 6,
+      "salary": "120000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2025,
+      "month": 7,
+      "salary": "120000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2025,
+      "month": 8,
+      "salary": "120000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2025,
+      "month": 9,
+      "salary": "120000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2025,
+      "month": 10,
+      "salary": "120000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2025,
+      "month": 11,
+      "salary": "120000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    },
+    {
+      "year": 2025,
+      "month": 12,
+      "salary": "120000.00",
+      "vacation_pay": "0",
+      "excluded_days": 0
+    }
+  ]
+}
