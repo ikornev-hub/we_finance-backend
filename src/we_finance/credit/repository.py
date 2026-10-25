@@ -9,10 +9,20 @@ import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Protocol
+from uuid import uuid4
 
+import psycopg2
 from pydantic import TypeAdapter
 
-from we_finance.credit.models import Loan, Prepayment, StoredLoan
+from we_finance.credit.models import (
+    DayCount,
+    Loan,
+    PaymentDayChange,
+    Prepayment,
+    PrepaymentMode,
+    RatePeriod,
+    StoredLoan,
+)
 
 # pydantic умеет проверять и сериализовать обычные dataclass-ы: Decimal → строка, date → ISO.
 _FILE_FORMAT = TypeAdapter(list[StoredLoan])
@@ -85,3 +95,162 @@ class JsonLoanRepository(InMemoryLoanRepository):
             tmp.write(data)
             tmp.write(b"\n")  # файл заканчивается переводом строки
         os.replace(tmp.name, self._path)
+
+
+class PostgresLoanRepository:
+    """Кредитыв postgres. Видит и пишет только кредиты одного пользователя"""
+
+    def __init__(self, database_url: str, user_id: str) -> None:
+        self._url = database_url
+        self._user_id = user_id
+
+    def add(self, loan: Loan) -> None:
+        """Сохранить новый кредит со ставками и сменами дня - все или ничего."""
+        conn = psycopg2.connect(self._url)
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO loans (id, user_id, name, principal, payment, months,
+                                           issue_date, first_payment_date, day_count,
+                                           weekend_shift, monthly_fee)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            loan.id,
+                            self._user_id,
+                            loan.name,
+                            loan.principal,
+                            loan.payment,
+                            loan.months,
+                            loan.issue_date,
+                            loan.first_payment_date,
+                            loan.day_count,
+                            loan.weekend_shift,
+                            loan.monthly_fee,
+                        ),
+                    )
+
+                    for rate in loan.rates:
+                        cur.execute(
+                            "INSERT INTO rate_periods (loan_id, start_date, annual_rate)"
+                            " VALUES (%s, %s, %s)",
+                            (loan.id, rate.start, rate.annual_rate),
+                        )
+
+                    for change in loan.payment_day_changes:
+                        cur.execute(
+                            "INSERT INTO payment_day_changes (loan_id, start_date, day)"
+                            " VALUES (%s, %s, %s)",
+                            (loan.id, change.start, change.day),
+                        )
+        finally:
+            conn.close()
+
+    def get(self, loan_id: str) -> StoredLoan | None:
+        """Кредит по id или None, если такого нет или он чужой"""
+        conn = psycopg2.connect(self._url)
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT id, name, principal, payment, months, issue_date,
+                               first_payment_date, day_count, weekend_shift, monthly_fee
+                        FROM loans
+                        WHERE id = %s AND user_id = %s
+                        """,
+                        (loan_id, self._user_id),
+                    )
+
+                    row = cur.fetchone()
+                    if row is None:
+                        return None
+
+                    cur.execute(
+                        "SELECT start_date, annual_rate FROM rate_periods"
+                        " WHERE loan_id = %s ORDER BY start_date",
+                        (loan_id,),
+                    )
+                    rates = tuple(
+                        RatePeriod(start=start, annual_rate=rate) for start, rate in cur.fetchall()
+                    )
+
+                    cur.execute(
+                        "SELECT start_date, day FROM payment_day_changes"
+                        " WHERE loan_id = %s ORDER BY start_date",
+                        (loan_id,),
+                    )
+                    day_changes = tuple(
+                        PaymentDayChange(start=start, day=day) for start, day in cur.fetchall()
+                    )
+
+                    # Две ЧДП в один день — в том порядке, в каком их вносили.
+                    cur.execute(
+                        """
+                        SELECT prepayment_date, amount, mode
+                        FROM prepayments
+                        WHERE loan_id = %s
+                        ORDER BY prepayment_date, created_at
+                        """,
+                        (loan_id,),
+                    )
+                    prepayments = tuple(
+                        Prepayment(date=paid_on, amount=amount, mode=PrepaymentMode(mode))
+                        for paid_on, amount, mode in cur.fetchall()
+                    )
+
+                    loan = Loan(
+                        id=row[0],
+                        name=row[1],
+                        principal=row[2],
+                        rates=rates,
+                        payment=row[3],
+                        months=row[4],
+                        issue_date=row[5],
+                        first_payment_date=row[6],
+                        day_count=DayCount(row[7]),
+                        weekend_shift=row[8],
+                        monthly_fee=row[9],
+                        payment_day_changes=day_changes,
+                    )
+                    return StoredLoan(loan=loan, prepayments=prepayments)
+        finally:
+            conn.close()
+
+    def add_prepayment(self, loan_id: str, prepayment: Prepayment) -> None:
+        conn = psycopg2.connect(self._url)
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO prepayments (id, loan_id, prepayment_date, amount, mode)
+                        VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (
+                            uuid4().hex,
+                            loan_id,
+                            prepayment.date,
+                            prepayment.amount,
+                            prepayment.mode,
+                        ),
+                    )
+        finally:
+            conn.close()
+
+    def list_loans(self) -> list[StoredLoan]:
+        """Все кредиты пользователя в порядке добавления."""
+        conn = psycopg2.connect(self._url)
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT id FROM loans WHERE user_id = %s ORDER BY created_at",
+                        (self._user_id,),
+                    )
+                    ids = [row[0] for row in cur.fetchall()]
+        finally:
+            conn.close()
+        return [self.get(loan_id) for loan_id in ids]
