@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/ikornev-hub/we_finance-backend/compare/v0.1.1...v0.2.0) (2026-10-25)
+
+
+### Features
+
+* salary function ([#29](https://github.com/ikornev-hub/we_finance-backend/issues/29)) ([a949a92](https://github.com/ikornev-hub/we_finance-backend/commit/a949a9213abbe9d395df0ac680852a09129b1f68))
+
 ## [0.1.1](https://github.com/ikornev-hub/we_finance-backend/compare/v0.1.0...v0.1.1) (2026-10-15)
 
 
