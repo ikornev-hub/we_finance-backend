@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/ikornev-hub/we_finance-backend/compare/v0.2.0...v0.3.0) (2026-10-25)
+
+
+### Features
+
+* store loans in postgres, apply migrations on startup ([#31](https://github.com/ikornev-hub/we_finance-backend/issues/31)) ([205a4c1](https://github.com/ikornev-hub/we_finance-backend/commit/205a4c1e10e8fc9cc7718bf09759664c713b4129))
+
 ## [0.2.0](https://github.com/ikornev-hub/we_finance-backend/compare/v0.1.1...v0.2.0) (2026-10-25)
 
 
