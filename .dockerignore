@@ -4,6 +4,9 @@
 !requirements.txt
 !src/
 
+!alembic.ini
+!migrations/
+
 **/__pycache__
 **/*.pyc
 **/*.egg-info

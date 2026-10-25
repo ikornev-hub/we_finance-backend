@@ -53,7 +53,6 @@ body:
     id: preconditions
     attributes:
       label: Предусловия
-      placeholder: "CREDIT_DATA_PATH указывает на data/credit.example.json"
   - type: textarea
     id: steps
     attributes:
