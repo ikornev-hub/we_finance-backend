@@ -302,12 +302,13 @@ def month_plan(
     return MonthPlan(income, credit, repo.mandatory_plan(start, end))
 
 
-def month_report(
+def month_report(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     repo: PostgresExpenseRepository,
     salary_repo: SalaryRepository,
     loan_repo: LoanRepository,
     month: str,
     today: date,
+    states: list[GoalState] | None = None,
 ) -> MonthReport:
     """Месяц: факт по выписке, прогноз «план + факт», доли и границы категорий.
 
@@ -316,7 +317,8 @@ def month_report(
     start, end = month_range(month)
     closed = end <= today
     plan = MonthPlan() if closed else month_plan(repo, salary_repo, loan_repo, month)
-    states = goal_states(repo, start, LoanGoals(loan_repo, salary_repo, today))
+    if states is None:
+        states = projected_states(repo, salary_repo, loan_repo, start, today)
     plan = MonthPlan(plan.income, plan.credit, plan.mandatory, sum((s.plan for s in states), ZERO))
     manual = sum((c.amount for c in repo.manual_contributions() if start <= c.day < end), ZERO)
     flows = repo.month_flows(start, end)
@@ -416,6 +418,7 @@ class GoalView:  # pylint: disable=too-many-instance-attributes  # поля = к
     account_tails: list[str]
     start_date: date | None = None
     paydays: list[Payday] = field(default_factory=list)
+    projected: bool = False  # будущий месяц: «отложено» — ожидаемое к его началу
     loan_id: str | None = None
     closes_on: date | None = None  # цель «закрыть кредит»: когда закроется при таких ЧДП
     interest_saved: Decimal | None = None  # сколько процентов не уйдёт банку
@@ -423,11 +426,15 @@ class GoalView:  # pylint: disable=too-many-instance-attributes  # поля = к
 
 
 def goal_states(
-    repo: PostgresExpenseRepository, month_start: date, loans: LoanGoals
+    repo: PostgresExpenseRepository,
+    month_start: date,
+    loans: LoanGoals,
+    expected: dict[str, Decimal] | None = None,
 ) -> list[GoalState]:
     """Все цели: отложено (взносы из выписки и вручную) и план на месяц month_start.
 
     Цель «закрыть кредит»: отложено — на сколько уменьшился долг, план — ЧДП месяца.
+    expected — будущий месяц: сколько будет отложено к его началу по прогнозу.
     """
     contributions = repo.manual_contributions() + goal_rules.from_statement(
         repo.savings_operations(), repo.savings_accounts()
@@ -438,16 +445,68 @@ def goal_states(
             loan = loans.state(goal, month_start)
             result.append(GoalState(goal, loan.saved, loan.saved_before, loan.plan))
             continue
-        before = goal_rules.saved(goal, contributions, month_start)
-        result.append(
-            GoalState(
-                goal,
-                goal_rules.saved(goal, contributions),
-                before,
-                goal_rules.plan(goal, before, month_start),
-            )
-        )
+        if expected is not None and goal.id in expected:
+            before = saved = expected[goal.id]
+        else:
+            before = goal_rules.saved(goal, contributions, month_start)
+            saved = goal_rules.saved(goal, contributions)
+        result.append(GoalState(goal, saved, before, goal_rules.plan(goal, before, month_start)))
     return result
+
+
+def _goal_room(
+    repo: PostgresExpenseRepository,
+    salary_repo: SalaryRepository,
+    loan_repo: LoanRepository,
+    month: str,
+    today: date,
+) -> Decimal:
+    """Сколько месяц может отдать целям: доход − обязательные − границы трат."""
+    start, end = month_range(month)
+    closed = end <= today
+    plan = MonthPlan() if closed else month_plan(repo, salary_repo, loan_repo, month)
+    report = build_month(
+        month,
+        repo.limited_groups(),
+        repo.limited_tree(),
+        repo.month_flows(start, end),
+        plan,
+        closed,
+    )
+    return report.forecast.unallocated  # план целей = 0 → свободное до целей
+
+
+def projected_states(
+    repo: PostgresExpenseRepository,
+    salary_repo: SalaryRepository,
+    loan_repo: LoanRepository,
+    month_start: date,
+    today: date,
+) -> list[GoalState]:
+    """Цели на месяц; будущий — с прогнозом накоплений (Решение 2026-10-27).
+
+    От текущего месяца до нужного: в каждом цели получают столько, сколько влезает в бюджет
+    (не хватает — пропорционально), отложенное переносится в следующий месяц.
+    """
+    loans = LoanGoals(loan_repo, salary_repo, today)
+    current = today.replace(day=1)
+    if month_start <= current:
+        return goal_states(repo, month_start, loans)
+    states = goal_states(repo, current, loans)
+    now = {s.goal.id: s.saved for s in states}
+    expected = {s.goal.id: s.saved_before for s in states if not s.goal.loan_id}
+    cursor = current
+    while cursor < month_start:
+        if cursor != current:
+            states = goal_states(repo, cursor, loans, expected)
+        room = _goal_room(repo, salary_repo, loan_repo, f"{cursor:%Y-%m}", today)
+        real = goal_rules.allocate({s.goal.id: s.plan for s in states}, room)
+        for goal_id in expected:
+            expected[goal_id] += real[goal_id]
+            if cursor == current:  # в этом месяце уже отложили больше — берём факт
+                expected[goal_id] = max(expected[goal_id], now[goal_id])
+        cursor = date(cursor.year + cursor.month // 12, cursor.month % 12 + 1, 1)
+    return goal_states(repo, month_start, loans, expected)
 
 
 def goals_view(
@@ -460,8 +519,8 @@ def goals_view(
     """Цели на месяц: не хватает на все планы — каждой пропорционально (решение заказчика)."""
     start, _ = month_range(month)
     loans = LoanGoals(loan_repo, salary_repo, today)
-    states = goal_states(repo, start, loans)
-    report = month_report(repo, salary_repo, loan_repo, month, today)
+    states = projected_states(repo, salary_repo, loan_repo, start, today)
+    report = month_report(repo, salary_repo, loan_repo, month, today, states)
     total = sum((s.plan for s in states), ZERO)
     shortage = max(-report.forecast.unallocated, ZERO)  # границы трат не влезают в остаток
     real = goal_rules.allocate({s.goal.id: s.plan for s in states}, total - shortage)
@@ -501,6 +560,7 @@ def _goal_view(  # pylint: disable=too-many-arguments,too-many-positional-argume
             Payday(day, kind, amount) for day, kind, amount in goal_rules.by_paydays(real, paydays)
         ],
     )
+    view = replace(view, projected=start > loans.today)
     if not s.goal.loan_id:
         return view
     loan = loans.outcome(s.goal, start, real)

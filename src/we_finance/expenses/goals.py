@@ -103,13 +103,14 @@ def plan(goal: Goal, saved_before: Decimal, month_start: dt.date) -> Decimal:
     left = goal.target_amount - saved_before
     first = _first_month(goal)
     if left <= 0 or (first is not None and month_start < first):
-        return ZERO
+        return ZERO.quantize(CENT)
     if goal.deadline is None:
         return min(goal.monthly_amount or ZERO, left)
     if goal.deadline < month_start:
         return left  # срок прошёл — весь остаток
     months = months_between(month_start, goal.deadline)
-    return (left / months).quantize(RUBLE, rounding=ROUND_CEILING).quantize(CENT)
+    # вверх до рубля, но не больше остатка: последний взнос не перелетает цель
+    return min((left / months).quantize(RUBLE, rounding=ROUND_CEILING), left).quantize(CENT)
 
 
 def allocate(plans: dict[str, Decimal], available: Decimal) -> dict[str, Decimal]:

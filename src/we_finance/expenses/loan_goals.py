@@ -106,6 +106,7 @@ class LoanGoals:
         }
         self.paydays = Paydays(salary_repo)
         self.today = today
+        self._base: dict[str, Decimal | None] = {}  # доля выплат от сегодняшнего остатка
 
     def _first(self, goal: Goal) -> date:
         """С какого дня вносить ЧДП: с завтра (сегодняшнее уже в истории) или со старта цели."""
@@ -118,24 +119,43 @@ class LoanGoals:
         if stored is None:
             return LoanGoalState(ZERO, ZERO, ZERO)
         loan, done = stored.loan, stored.prepayments
-        now = payoff.balance_on(loan, done, self.today)
-        before = payoff.balance_on(loan, done, min(self.today, month_start - DAY))
+        if month_start <= self.today:
+            now = payoff.balance_on(loan, done, self.today)
+            before = payoff.balance_on(loan, done, min(self.today, month_start - DAY))
+            saved = max(goal.target_amount - now, ZERO)
+        else:
+            # будущий месяц: до его начала ЧДП внесены по плану — ожидаемый остаток
+            planned = [*done, *self._until(goal, stored, month_start)]
+            before = payoff.balance_on(loan, planned, month_start)
+            saved = max(goal.target_amount - before, ZERO)
         return LoanGoalState(
-            max(goal.target_amount - now, ZERO),
+            saved,
             max(goal.target_amount - before, ZERO),
             self._plan(goal, stored, month_start),
         )
 
     def _plan(self, goal: Goal, stored: StoredLoan, month_start: date) -> Decimal:
         month = self.paydays.between(max(month_start, self._first(goal)), next_month(month_start))
-        if not month:
-            return ZERO.quantize(CENT)
+        if goal.deadline is not None:
+            month = [paid for paid in month if paid[0] <= goal.deadline]
+        planned = [*stored.prepayments, *self._until(goal, stored, month_start)]
+        if not month or payoff.closing_date(stored.loan, planned) < month_start:
+            return ZERO.quantize(CENT)  # выплат нет или кредит к этому месяцу уже закрыт
         if goal.deadline is None:
             return goal.monthly_amount or ZERO
-        share = self._share(goal.deadline, stored, stored.prepayments, self._first(goal))
+        share = self._base_share(goal, stored)
         if not share:
             return ZERO.quantize(CENT)
         return sum((p.amount for p in payoff.by_share(share, _net(month))), ZERO).quantize(CENT)
+
+    def _base_share(self, goal: Goal, stored: StoredLoan) -> Decimal | None:
+        """Доля выплат «к дате» от сегодняшнего остатка — одна на запрос."""
+        if goal.id not in self._base:
+            deadline = goal.deadline or self.today  # зовётся только для «к дате»
+            self._base[goal.id] = self._share(
+                deadline, stored, stored.prepayments, self._first(goal)
+            )
+        return self._base[goal.id]
 
     def _share(
         self,
@@ -188,7 +208,7 @@ class LoanGoals:
         if month_start <= first:
             return []
         if goal.deadline is not None:
-            share = self._share(goal.deadline, stored, stored.prepayments, first)
+            share = self._base_share(goal, stored)
             return payoff.by_share(share or ZERO, _net(self.paydays.between(first, month_start)))
         steady = self._steady(goal.monthly_amount or ZERO, stored, list(stored.prepayments), first)
         return [p for p in steady if p.date < month_start]
