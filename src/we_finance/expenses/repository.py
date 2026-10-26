@@ -19,6 +19,7 @@ from we_finance.expenses.categories import (
     OWN_TRANSFER,
     UNCATEGORIZED,
     Rule,
+    pattern_words,
 )
 from we_finance.expenses.classify import OperationType, Owner
 from we_finance.expenses.errors import ExpenseError
@@ -142,13 +143,19 @@ _OPERATIONS_SQL = (
 )
 
 
-# Неразобранная операция подходит под правило (kind, pattern) — как categories._matches.
+# Неразобранная операция подходит под правило (kind, pattern) — как categories._matches:
+# получатель целиком; мерчант — подстрока или все значимые слова шаблона целыми словами.
 _UNCATEGORIZED_MATCH = (
     " c.system_code = 'uncategorized' AND o.user_id = %(user)s"
     " AND CASE WHEN %(kind)s = 'counterparty' THEN o.counterparty = %(pattern)s"
     " ELSE position(lower(%(pattern)s)"
-    " IN lower(coalesce(o.merchant, '') || ' ' || o.description)) > 0 END"
+    " IN lower(coalesce(o.merchant, '') || ' ' || o.description)) > 0"
+    " OR (cardinality(%(words)s::text[]) > 0 AND regexp_split_to_array("
+    "lower(coalesce(o.merchant, '') || ' ' || o.description), %(separators)s)"
+    " @> %(words)s::text[]) END"
 )
+# WORD_SEPARATORS в синтаксисе регулярок Postgres.
+_SQL_SEPARATORS = r'[[:space:]/\\*.,;:()"«»_-]+'
 
 
 def _operation(row: tuple) -> StoredOperation:
@@ -656,7 +663,14 @@ class PostgresExpenseRepository(_Categories, _Accounts):
             + " WHERE o.id <> %(id)s AND"
             + _UNCATEGORIZED_MATCH
             + " ORDER BY o.operated_at, o.bank_operation_id",
-            {"id": operation_id, "user": self._user_id, "kind": match_kind, "pattern": pattern},
+            {
+                "id": operation_id,
+                "user": self._user_id,
+                "kind": match_kind,
+                "pattern": pattern,
+                "words": pattern_words(pattern) if match_kind == "merchant" else [],
+                "separators": _SQL_SEPARATORS,
+            },
         )
         return [_operation(row) for row in cur.fetchall()]
 
