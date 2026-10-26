@@ -9,6 +9,8 @@ from we_finance.expenses.statement import StatementOperation
 UNCATEGORIZED = "Неопределённые"
 CREDIT = "Кредит"
 INCOME = "Доход"
+# Пока банк один, перевод себе — расход (решение 2026-10-26); нейтральным станет со вторым банком.
+OWN_TRANSFER = "Переводы себе"
 
 # Стартовое дерево: категория → подкатегории. Каждому пользователю — копия, дальше он меняет её сам.
 DEFAULT_TREE: dict[str, list[str]] = {
@@ -32,6 +34,7 @@ DEFAULT_TREE: dict[str, list[str]] = {
     "Крупные покупки": [],
     "Маркетплейсы": [],
     "Прочее": ["Доставка"],
+    OWN_TRANSFER: [],
     CREDIT: [],
     INCOME: [],
     UNCATEGORIZED: [],
@@ -89,10 +92,13 @@ def _matches(rule: Rule, op: StatementOperation) -> bool:
     return rule.pattern.lower() in f"{op.merchant or ''} {op.description}".lower()
 
 
-def category_for(op: StatementOperation, kind: OperationType, rules: list[Rule]) -> str | None:
-    """Категория «Категория/Подкатегория»; None — нейтральная (перевод себе)."""
+def category_for(op: StatementOperation, kind: OperationType, rules: list[Rule]) -> str:
+    """Категория «Категория/Подкатегория».
+
+    Перевод себе: ушло — «Переводы себе» (расход), пришло — решает пользователь.
+    """
     if kind == OperationType.TRANSFER_OWN:
-        return None
+        return OWN_TRANSFER if op.amount < 0 else UNCATEGORIZED
     if kind == OperationType.TRANSFER_CREDIT:
         return CREDIT
     if kind == OperationType.INCOME:

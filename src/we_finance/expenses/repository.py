@@ -10,7 +10,14 @@ from uuid import uuid4
 import psycopg2
 from psycopg2 import errorcodes
 
-from we_finance.expenses.categories import CREDIT, DEFAULT_TREE, INCOME, UNCATEGORIZED, Rule
+from we_finance.expenses.categories import (
+    CREDIT,
+    DEFAULT_TREE,
+    INCOME,
+    OWN_TRANSFER,
+    UNCATEGORIZED,
+    Rule,
+)
 from we_finance.expenses.classify import OperationType, Owner
 from we_finance.expenses.errors import ExpenseError
 from we_finance.expenses.statement import StatementOperation
@@ -21,6 +28,7 @@ SYSTEM_CODES = {
     CREDIT: "credit",
     INCOME: "income",
     "Маркетплейсы": "marketplace",
+    OWN_TRANSFER: "own_transfer",
 }
 # Код системной категории → имя, под которым её знает ядро (пользователь мог переименовать).
 CODE_NAMES = {code: name for name, code in SYSTEM_CODES.items()}
@@ -186,10 +194,48 @@ class _Categories(_Postgres):
             return ids
 
     def _ensure_tree(self, cur) -> None:
-        """Первый вход в «Расходы» — завести стартовое дерево."""
+        """Первый вход в «Расходы» — стартовое дерево; появилась новая системная — дозавести."""
         cur.execute("SELECT count(*) FROM expense_categories WHERE user_id = %s", (self._user_id,))
         if cur.fetchone()[0] == 0:
             self._create_default_tree(cur)
+        cur.execute(
+            "SELECT system_code FROM expense_categories"
+            " WHERE user_id = %s AND system_code IS NOT NULL",
+            (self._user_id,),
+        )
+        have = {row[0] for row in cur.fetchall()}
+        for name, code in SYSTEM_CODES.items():
+            if code not in have:
+                self._add_system_category(cur, name, code)
+
+    def _add_system_category(self, cur, name: str, code: str) -> None:
+        """Системная категория у старого пользователя; есть своя с таким именем — она и станет ею.
+
+        «Переводы себе» (2026-10-26): операции, которые были нейтральными, — ушедшие сюда,
+        пришедшие — в «Неопределённые».
+        """
+        cur.execute(
+            "INSERT INTO expense_categories (id, user_id, name, system_code)"
+            " VALUES (%s, %s, %s, %s)"
+            " ON CONFLICT ON CONSTRAINT expense_categories_unique_name"
+            " DO UPDATE SET system_code = EXCLUDED.system_code RETURNING id",
+            (uuid4().hex, self._user_id, name, code),
+        )
+        category_id = cur.fetchone()[0]
+        if code != SYSTEM_CODES[OWN_TRANSFER]:
+            return
+        cur.execute(
+            "UPDATE expense_operations SET category_id = %s"
+            " WHERE user_id = %s AND category_id IS NULL AND amount < 0",
+            (category_id, self._user_id),
+        )
+        cur.execute(
+            "UPDATE expense_operations SET category_id = ("
+            "SELECT id FROM expense_categories WHERE user_id = %(user)s"
+            " AND system_code = 'uncategorized')"
+            " WHERE user_id = %(user)s AND category_id IS NULL AND amount > 0",
+            {"user": self._user_id},
+        )
 
     def _create_default_tree(self, cur) -> None:
         """Стартовое дерево: сначала категория, потом её подкатегории со ссылкой на неё."""
