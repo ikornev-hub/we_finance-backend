@@ -710,4 +710,5 @@ def analysis(  # pylint: disable=too-many-arguments,too-many-positional-argument
         months=[analysis_rules.to_month(report) for report, _ in facts],
         stats=analysis_rules.stats(full),
         pace=pace,
+        full_months=[report.month for report in full],
     )

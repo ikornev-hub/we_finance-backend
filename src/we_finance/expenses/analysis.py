@@ -6,7 +6,7 @@
 import calendar
 import datetime as dt
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 
 from we_finance.expenses.report import MonthReport
@@ -69,6 +69,7 @@ class Analysis:
     months: list[AnalysisMonth]
     stats: list[Stat]
     pace: Pace | None
+    full_months: list[str] = field(default_factory=list)  # закрытые и целиком покрытые выпиской
 
 
 def _money(value: Decimal) -> Decimal:
