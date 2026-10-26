@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 
 ALLOWED_ENVS = ("dev", "test", "stage", "prod")
 
@@ -20,11 +19,3 @@ def get_database_url() -> str:
     if not url:
         raise ConfigError("DATABASE_URL не задан")
     return url
-
-
-def get_salary_data_path() -> Path:
-    """Файл с профилем зарплаты (JSON). Реальные данные — только в локальном файле из .gitignore."""
-    path = os.environ.get("SALARY_DATA_PATH")
-    if not path:
-        raise ConfigError("SALARY_DATA_PATH не задан")
-    return Path(path)
