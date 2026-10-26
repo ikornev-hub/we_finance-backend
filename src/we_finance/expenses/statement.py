@@ -12,7 +12,8 @@ import openpyxl
 _DAY = re.compile(r"\d\d\.\d\d\.\d{4}")
 _MCC = re.compile(r"MCC:\s*(\d{4})")
 _PLACE = re.compile(r"место совершения операции:\s*[A-Z]{2}/[^/]+/([^,]+)")
-_PHONE = re.compile(r"(?:на|от) \+7 \((\d{3})\) (\d{3})-(\d{2})-(\d{2})")
+# «на +7 (900) 000-00-05» (исходящие СБП) и «от +79000000005» (входящие) — один и тот же номер.
+_PHONE = re.compile(r"(?:на|от) \+7 ?\(?(\d{3})\)? ?(\d{3})-?(\d{2})-?(\d{2})")
 
 
 class StatementFormatError(ValueError):
