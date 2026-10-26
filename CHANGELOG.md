@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/ikornev-hub/we_finance-backend/compare/v0.6.0...v0.7.0) (2026-10-26)
+
+
+### Features
+
+* loan archive, test account login, payment status for today ([#39](https://github.com/ikornev-hub/we_finance-backend/issues/39)) ([efbd2bc](https://github.com/ikornev-hub/we_finance-backend/commit/efbd2bc0900a8ff1e0567b9717e66ff3a4b9b340))
+
 ## [0.6.0](https://github.com/ikornev-hub/we_finance-backend/compare/v0.5.0...v0.6.0) (2026-10-26)
 
 
