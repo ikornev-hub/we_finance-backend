@@ -523,7 +523,14 @@ def analysis(  # pylint: disable=too-many-arguments,too-many-positional-argument
 ) -> analysis_rules.Analysis:
     """Динамика по фактам месяцев; статистика — по полным месяцам с выпиской; темп — текущий."""
     facts = _fact_reports(repo, _months(first, last), today)
-    full = [report for report, closed in facts if closed and report.has_statement]
+    periods = repo.statement_periods()
+
+    def covered(month: str) -> bool:  # месяц целиком внутри выписки: 27.04–… апрель не полный
+        start, end = month_range(month)
+        last = end - timedelta(days=1)
+        return any(first <= start and last <= until for first, until in periods)
+
+    full = [report for report, closed in facts if closed and covered(report.month)]
     current = f"{today.year}-{today.month:02}"
     pace = None
     if current in {report.month for report, _ in facts}:
