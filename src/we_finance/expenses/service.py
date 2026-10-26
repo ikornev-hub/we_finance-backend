@@ -1,6 +1,6 @@
 """Сценарии «Расходов» поверх ядра и хранилища. Про HTTP не знает."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import BinaryIO
@@ -389,6 +389,15 @@ class GoalState:
 
 
 @dataclass(frozen=True)
+class Payday:
+    """Сколько положить в цель в день выплаты зарплаты."""
+
+    date: date
+    kind: str  # advance — аванс, remainder — остаток
+    amount: Decimal
+
+
+@dataclass(frozen=True)
 class GoalView:  # pylint: disable=too-many-instance-attributes  # поля = контракт API
     """Цель для экрана: прогресс, план, реальный взнос (с пропорцией), месяц достижения."""
 
@@ -404,6 +413,8 @@ class GoalView:  # pylint: disable=too-many-instance-attributes  # поля = к
     contribution: Decimal
     eta: str | None
     account_tails: list[str]
+    start_date: date | None = None
+    paydays: list[Payday] = field(default_factory=list)
 
 
 def goal_states(repo: PostgresExpenseRepository, month_start: date) -> list[GoalState]:
@@ -439,6 +450,7 @@ def goals_view(
     total = sum((s.plan for s in states), ZERO)
     shortage = max(-report.forecast.unallocated, ZERO)  # границы трат не влезают в остаток
     real = goal_rules.allocate({s.goal.id: s.plan for s in states}, total - shortage)
+    paydays = _salary_paydays(salary_repo, start)
     tails: dict[str, list[str]] = {}
     for tail, goal_id in repo.savings_accounts().items():
         tails.setdefault(goal_id, []).append(tail)
@@ -456,9 +468,30 @@ def goals_view(
             contribution=real[s.goal.id],
             eta=goal_rules.eta(s.goal, s.saved_before, real[s.goal.id], start),
             account_tails=sorted(tails.get(s.goal.id, [])),
+            start_date=s.goal.start_date,
+            paydays=[
+                Payday(day, kind, amount)
+                for day, kind, amount in goal_rules.by_paydays(real[s.goal.id], paydays)
+            ],
         )
         for s in states
     ]
+
+
+def _salary_paydays(
+    salary_repo: SalaryRepository, month_start: date
+) -> list[tuple[date, str, Decimal]]:
+    """Аванс и остаток зарплаты в этом месяце: (дата, вид, на руки). Профиля нет — пусто."""
+    end = date(month_start.year + month_start.month // 12, month_start.month % 12 + 1, 1)
+    try:
+        payments = salary_service.year(salary_repo, month_start.year)
+    except salary_service.ProfileNotFoundError, salary_service.SalaryError:
+        return []
+    return sorted(
+        (p.date, str(p.kind), p.net)
+        for p in payments
+        if month_start <= p.date < end and str(p.kind) in {"advance", "remainder"}
+    )
 
 
 def save_goal(repo: PostgresExpenseRepository, goal: Goal) -> Goal:

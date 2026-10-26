@@ -276,6 +276,7 @@ class GoalIn(BaseModel):
     deadline: date | None = None
     monthly_amount: Annotated[Decimal | None, Field(gt=0, decimal_places=2)] = None
     initial_amount: Annotated[Decimal, Field(ge=0, decimal_places=2)] = Decimal("0")
+    start_date: date | None = None  # с какого числа начать копить; нет — сразу
 
 
 class ContributionIn(BaseModel):
