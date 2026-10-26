@@ -5,9 +5,13 @@ from datetime import date
 from decimal import Decimal
 from typing import BinaryIO
 
+from we_finance.credit.models import LoanStatus
+from we_finance.credit.repository import LoanRepository
+from we_finance.credit.schedule import calculate
 from we_finance.expenses.categories import category_for
 from we_finance.expenses.classify import operation_type
 from we_finance.expenses.errors import ExpenseError, ExpenseNotFoundError
+from we_finance.expenses.report import MonthPlan, MonthReport, build_month
 from we_finance.expenses.repository import (
     ClassifiedOperation,
     ImportResult,
@@ -19,6 +23,8 @@ from we_finance.expenses.repository import (
     StoredRule,
 )
 from we_finance.expenses.statement import StatementFormatError, parse_alfa
+from we_finance.salary import service as salary_service
+from we_finance.salary.repository import SalaryRepository
 
 PARSERS = {"alfa": parse_alfa}
 
@@ -128,22 +134,35 @@ def _category(repo: PostgresExpenseRepository, category_id: str) -> StoredCatego
     return category
 
 
+def _check_limit(share: Decimal | None, amount: Decimal | None) -> None:
+    if share is not None and amount is not None:
+        raise ExpenseError("Граница — либо в процентах, либо суммой, не обе сразу")
+
+
 def create_category(
     repo: PostgresExpenseRepository,
     name: str,
     parent_id: str | None,
-    target_share: Decimal | None,
+    limit: tuple[Decimal | None, Decimal | None] = (None, None),
 ) -> StoredCategory:
-    """Категория верхнего уровня или подкатегория; уровней два, цель — только у верхнего."""
+    """Категория верхнего уровня или подкатегория; уровней два, граница — только у верхнего.
+
+    limit = (доля располагаемого, сумма) — одно из двух.
+    """
+    target_share, target_amount = limit
+    _check_limit(target_share, target_amount)
     if parent_id is not None:
         parent = repo.category(parent_id)
         if parent is None:
             raise ExpenseError(f"Родительской категории {parent_id} нет")
         if parent.parent_id is not None:
             raise ExpenseError("Уровней два: у подкатегории не бывает своих подкатегорий")
-        if target_share is not None:
-            raise ExpenseError("Цель задаётся только категории верхнего уровня")
-    return _category(repo, repo.add_category(name, parent_id, target_share))
+        if target_share is not None or target_amount is not None:
+            raise ExpenseError("Граница задаётся только категории верхнего уровня")
+    category_id = repo.add_category(name, parent_id, target_share)
+    if target_amount is not None:
+        repo.set_limit(category_id, None, target_amount)
+    return _category(repo, category_id)
 
 
 def update_category(
@@ -155,10 +174,13 @@ def update_category(
         if changes["name"] is None:
             raise ExpenseError("Имя категории не может быть пустым")
         repo.rename_category(category_id, str(changes["name"]))
-    if "target_share" in changes:
-        if category.parent_id is not None and changes["target_share"] is not None:
-            raise ExpenseError("Цель задаётся только категории верхнего уровня")
-        repo.set_target_share(category_id, changes["target_share"])  # type: ignore[arg-type]
+    if "target_share" in changes or "target_amount" in changes:
+        share = changes.get("target_share")
+        amount = changes.get("target_amount")
+        _check_limit(share, amount)  # type: ignore[arg-type]
+        if category.parent_id is not None and (share is not None or amount is not None):
+            raise ExpenseError("Граница задаётся только категории верхнего уровня")
+        repo.set_limit(category_id, share, amount)  # type: ignore[arg-type]
     return _category(repo, category_id)
 
 
@@ -185,3 +207,40 @@ def delete_account(repo: PostgresExpenseRepository, account_id: str) -> None:
     """Удалить свой счёт; уже загруженные операции не пересчитываются."""
     if not repo.delete_account(account_id):
         raise ExpenseNotFoundError(f"Счёт {account_id} не найден")
+
+
+# ---------- месяц ----------
+
+
+def month_plan(
+    repo: PostgresExpenseRepository,
+    salary_repo: SalaryRepository,
+    loan_repo: LoanRepository,
+    month: str,
+) -> MonthPlan:
+    """План месяца: выплаты по «Доходам», платежи по графикам «Кредитов», жильё по правилам."""
+    start, end = month_range(month)
+    try:
+        payments = salary_service.year(salary_repo, start.year)
+    except salary_service.ProfileNotFoundError, salary_service.SalaryError:
+        payments = []  # профиля нет — дохода по плану нет, остаётся факт
+    income = sum((p.net for p in payments if start <= p.date < end), Decimal("0"))
+    credit = Decimal("0")
+    for stored in loan_repo.list_loans():
+        if stored.status == LoanStatus.DELETED:
+            continue
+        rows, _ = calculate(stored.loan, stored.prepayments)
+        credit += sum((row.payment for row in rows if start <= row.date < end), Decimal("0"))
+    return MonthPlan(income, credit, repo.housing_plan())
+
+
+def month_report(
+    repo: PostgresExpenseRepository,
+    salary_repo: SalaryRepository,
+    loan_repo: LoanRepository,
+    month: str,
+) -> MonthReport:
+    """Месяц: факт по выписке, прогноз «план + факт», доли и границы категорий."""
+    start, end = month_range(month)
+    plan = month_plan(repo, salary_repo, loan_repo, month)
+    return build_month(month, repo.limited_tree(), repo.month_flows(start, end), plan)

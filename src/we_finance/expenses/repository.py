@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from uuid import uuid4
 
 import psycopg2
@@ -13,6 +13,7 @@ from psycopg2 import errorcodes
 from we_finance.expenses.categories import (
     CREDIT,
     DEFAULT_TREE,
+    HOUSING,
     INCOME,
     OWN_TRANSFER,
     UNCATEGORIZED,
@@ -20,6 +21,7 @@ from we_finance.expenses.categories import (
 )
 from we_finance.expenses.classify import OperationType, Owner
 from we_finance.expenses.errors import ExpenseError
+from we_finance.expenses.report import Flow, LimitedCategory
 from we_finance.expenses.statement import StatementOperation
 
 # Системные категории: на них опирается автоматика, удалять нельзя (бизнес-требования).
@@ -29,6 +31,7 @@ SYSTEM_CODES = {
     INCOME: "income",
     "Маркетплейсы": "marketplace",
     OWN_TRANSFER: "own_transfer",
+    HOUSING: "housing",
 }
 # Код системной категории → имя, под которым её знает ядро (пользователь мог переименовать).
 CODE_NAMES = {code: name for name, code in SYSTEM_CODES.items()}
@@ -98,6 +101,7 @@ class StoredCategory:
     parent_id: str | None
     system_code: str | None
     target_share: Decimal | None
+    target_amount: Decimal | None
     children: list[CategoryChild]
 
 
@@ -147,9 +151,8 @@ _UNCATEGORIZED_MATCH = (
 def _operation(row: tuple) -> StoredOperation:
     """Строка _OPERATIONS_SQL → операция."""
     op_id, day, amount, *texts, kind, category_id, path = row
-    return StoredOperation(
-        op_id, day, amount.quantize(Decimal("0.01")), *texts, OperationType(kind), category_id, path
-    )
+    amount = amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return StoredOperation(op_id, day, amount, *texts, OperationType(kind), category_id, path)
 
 
 class _Postgres:  # pylint: disable=too-few-public-methods  # база для тематических частей
@@ -264,7 +267,8 @@ class _Categories(_Postgres):
         with self._cursor() as cur:
             self._ensure_tree(cur)
             cur.execute(
-                "SELECT id, parent_id, name, system_code, target_share FROM expense_categories"
+                "SELECT id, parent_id, name, system_code, target_share, target_amount"
+                " FROM expense_categories"
                 " WHERE user_id = %s ORDER BY system_code IS NOT NULL, name",
                 (self._user_id,),
             )
@@ -274,8 +278,10 @@ class _Categories(_Postgres):
             if parent_id:
                 children.setdefault(parent_id, []).append(CategoryChild(category_id, name))
         return [
-            StoredCategory(category_id, name, None, code, share, children.get(category_id, []))
-            for category_id, parent_id, name, code, share in rows
+            StoredCategory(
+                category_id, name, None, code, share, amount, children.get(category_id, [])
+            )
+            for category_id, parent_id, name, code, share, amount in rows
             if parent_id is None
         ]
 
@@ -283,8 +289,8 @@ class _Categories(_Postgres):
         """Категория пользователя с подкатегориями; нет — None."""
         with self._cursor() as cur:
             cur.execute(
-                "SELECT id, name, parent_id, system_code, target_share FROM expense_categories"
-                " WHERE user_id = %s AND id = %s",
+                "SELECT id, name, parent_id, system_code, target_share, target_amount"
+                " FROM expense_categories WHERE user_id = %s AND id = %s",
                 (self._user_id, category_id),
             )
             row = cur.fetchone()
@@ -346,13 +352,43 @@ class _Categories(_Postgres):
                 raise
             raise ExpenseError(f"Категория «{name}» здесь уже есть") from exc
 
-    def set_target_share(self, category_id: str, target_share: Decimal | None) -> None:
-        """Цель — доля располагаемого; None — без цели."""
+    def set_limit(
+        self, category_id: str, target_share: Decimal | None, target_amount: Decimal | None
+    ) -> None:
+        """Граница: доля располагаемого или сумма (одно из двух); оба None — без границы."""
         with self._cursor() as cur:
             cur.execute(
-                "UPDATE expense_categories SET target_share = %s WHERE user_id = %s AND id = %s",
-                (target_share, self._user_id, category_id),
+                "UPDATE expense_categories SET target_share = %s, target_amount = %s"
+                " WHERE user_id = %s AND id = %s",
+                (target_share, target_amount, self._user_id, category_id),
             )
+
+    def limited_tree(self) -> list[LimitedCategory]:
+        """Дерево для отчёта месяца: границы и подкатегории."""
+        return [
+            LimitedCategory(
+                c.id,
+                c.name,
+                c.system_code,
+                c.target_share,
+                c.target_amount,
+                [(child.id, child.name) for child in c.children],
+            )
+            for c in self.categories()
+        ]
+
+    def housing_plan(self) -> Decimal:
+        """Жильё по плану: суммы правил с суммой, которые ведут в «Жильё» (аренда 30 000)."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT coalesce(sum(r.amount), 0) FROM expense_rules r"
+                " JOIN expense_categories c ON c.id = r.category_id"
+                " LEFT JOIN expense_categories p ON p.id = c.parent_id"
+                " WHERE r.user_id = %s AND r.amount IS NOT NULL"
+                " AND 'housing' IN (c.system_code, p.system_code)",
+                (self._user_id,),
+            )
+            return cur.fetchone()[0]
 
     def delete_category(self, category_id: str, move_to: str) -> None:
         """Удалить с подкатегориями: их операции — в move_to, их правила — удалить."""
@@ -647,3 +683,19 @@ class PostgresExpenseRepository(_Categories, _Accounts):
                 (category_id, self._user_id, applied),
             )
         return StoredRule(rule_id, match_kind, pattern, category_id), applied
+
+    def month_flows(self, start: date, end: date) -> dict[str, Flow]:
+        """Категория → ушло, пришло и число операций за период [start, end)."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT category_id,"
+                " coalesce(sum(-amount) FILTER (WHERE amount < 0), 0),"
+                " coalesce(sum(amount) FILTER (WHERE amount > 0), 0),"
+                " count(*)"
+                " FROM expense_operations"
+                " WHERE user_id = %s AND operated_at >= %s AND operated_at < %s"
+                " AND category_id IS NOT NULL"
+                " GROUP BY category_id",
+                (self._user_id, start, end),
+            )
+            return {row[0]: Flow(*row[1:]) for row in cur.fetchall()}

@@ -4,10 +4,12 @@ from decimal import Decimal
 from io import BytesIO
 from typing import Annotated, Literal, Self
 
-from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Path, Query, Response, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from we_finance.credit.repository import LoanRepository
 from we_finance.expenses import service
+from we_finance.expenses.report import MonthReport
 from we_finance.expenses.repository import (
     ImportResult,
     NewAccount,
@@ -17,7 +19,12 @@ from we_finance.expenses.repository import (
     StoredOperation,
 )
 from we_finance.expenses.service import CategoryChange, RulePreview
-from we_finance.routers.deps import get_expense_repository
+from we_finance.routers.deps import (
+    get_expense_repository,
+    get_repository,
+    get_salary_repository,
+)
+from we_finance.salary.repository import SalaryRepository
 
 router = APIRouter(prefix="/expenses", tags=["expenses"])
 
@@ -67,26 +74,32 @@ def change_category(repo: Repo, operation_id: str, change: CategoryChangeIn) -> 
 # ---------- категории ----------
 
 Share = Annotated[Decimal, Field(ge=0, le=1, examples=["0.15"])]
+Amount = Annotated[Decimal, Field(ge=0, decimal_places=2, examples=["15000.00"])]
 Name = Annotated[str, Field(min_length=1, max_length=60)]
 
 
 class CategoryIn(BaseModel):
-    """Новая категория; parent_id — подкатегория; target_share — цель, доля располагаемого."""
+    """Новая категория; parent_id — подкатегория; граница — доля располагаемого или сумма."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
     name: Name
     parent_id: str | None = None
     target_share: Share | None = None
+    target_amount: Amount | None = None
 
 
 class CategoryPatch(BaseModel):
-    """Что поменять; target_share: null — убрать цель. Не переданное поле не меняется."""
+    """Что поменять. Граница: target_share или target_amount; оба null — убрать.
+
+    Не переданное поле не меняется; задать одно — значит убрать другое.
+    """
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
     name: Name | None = None
     target_share: Share | None = None
+    target_amount: Amount | None = None
 
 
 @router.get("/categories", summary="Дерево категорий")
@@ -98,7 +111,9 @@ def list_categories(repo: Repo) -> list[StoredCategory]:
 @router.post("/categories", status_code=status.HTTP_201_CREATED, summary="Добавить категорию")
 def create_category(repo: Repo, category: CategoryIn) -> StoredCategory:
     """Категория или подкатегория (уровней два); цель — только у верхнего уровня."""
-    return service.create_category(repo, category.name, category.parent_id, category.target_share)
+    return service.create_category(
+        repo, category.name, category.parent_id, (category.target_share, category.target_amount)
+    )
 
 
 @router.patch("/categories/{category_id}", summary="Переименовать, задать цель")
@@ -161,3 +176,17 @@ def delete_account(repo: Repo, account_id: str) -> Response:
     """Удаляет счёт; уже загруженные операции не трогает."""
     service.delete_account(repo, account_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------- месяц ----------
+
+
+@router.get("/months/{month}", summary="Месяц: факт, прогноз, доли и границы (Р3)")
+def month_report(
+    repo: Repo,
+    salary_repo: Annotated[SalaryRepository, Depends(get_salary_repository)],
+    loan_repo: Annotated[LoanRepository, Depends(get_repository)],
+    month: Annotated[str, Path(pattern=r"^\d{4}-\d{2}$", examples=["2026-10"])],
+) -> MonthReport:
+    """Факт по выписке; прогноз — больше из плана («Доходы», «Кредиты», правила жилья) и факта."""
+    return service.month_report(repo, salary_repo, loan_repo, month)
