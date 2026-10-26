@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/ikornev-hub/we_finance-backend/compare/v0.5.0...v0.6.0) (2026-10-26)
+
+
+### Features
+
+* set login and password on project ([#37](https://github.com/ikornev-hub/we_finance-backend/issues/37)) ([be0a285](https://github.com/ikornev-hub/we_finance-backend/commit/be0a285ff92495592f84a4b1388adb09eee8e583))
+
 ## [0.5.0](https://github.com/ikornev-hub/we_finance-backend/compare/v0.4.0...v0.5.0) (2026-10-26)
 
 
