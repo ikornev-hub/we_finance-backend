@@ -11,6 +11,7 @@ import psycopg2
 from psycopg2 import errorcodes
 
 from we_finance.expenses.categories import (
+    CASH,
     CREDIT,
     DEFAULT_TREE,
     HOUSING,
@@ -33,6 +34,7 @@ SYSTEM_CODES = {
     "Маркетплейсы": "marketplace",
     OWN_TRANSFER: "own_transfer",
     HOUSING: "housing",
+    CASH: "cash",
 }
 # Код системной категории → имя, под которым её знает ядро (пользователь мог переименовать).
 CODE_NAMES = {code: name for name, code in SYSTEM_CODES.items()}
