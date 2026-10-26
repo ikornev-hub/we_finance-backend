@@ -14,6 +14,13 @@ _MCC = re.compile(r"MCC:\s*(\d{4})")
 _PLACE = re.compile(r"место совершения операции:\s*[A-Z]{2}/[^/]+/([^,]+)")
 # «на +7 (900) 000-00-05» (исходящие СБП) и «от +79000000005» (входящие) — один и тот же номер.
 _PHONE = re.compile(r"(?:на|от) \+7 ?\(?(\d{3})\)? ?(\d{3})-?(\d{2})-?(\d{2})")
+# Оплата по QR (#44): «…Платеж C… в <магазин> через Систему быстрых платежей» и
+# Alfa Pay «…по QR коду. Получатель <магазин>».
+_QR_SHOP = re.compile(r"Платеж C\S+ в (.+?) через Систему быстрых платежей")
+_QR_RECIPIENT = re.compile(r"по QR коду\. Получатель (.+?)\s*$")
+# Клиент Альфа-Банка по имени (#45): «Перевод клиенту ИВАН ИВАНОВИЧ И. по номеру…»,
+# «Перевод от клиента ИВАН ИВАНОВИЧ И.. Перевод денежных средств».
+_CLIENT = re.compile(r"Перевод (?:клиенту|от клиента) (.+? [А-ЯЁA-Z]\.)")
 
 
 class StatementFormatError(ValueError):
@@ -86,6 +93,13 @@ def parse_alfa(source: Path | BinaryIO) -> list[StatementOperation]:
     return read_alfa(source).operations
 
 
+def _counterparty(phone: re.Match | None, client: re.Match | None) -> str | None:
+    """Получатель или отправитель: номер телефона, иначе имя клиента Альфа-Банка."""
+    if phone:
+        return "+7" + "".join(phone.groups())
+    return client.group(1).strip() if client else None
+
+
 def _operations(rows: list[tuple]) -> list[StatementOperation]:
     """Строки таблицы операций → операции; строки не с датой пропускаются."""
     operations = []
@@ -94,8 +108,10 @@ def _operations(rows: list[tuple]) -> list[StatementOperation]:
             continue
         description = str(row[11])
         mcc = _MCC.search(description)
-        place = _PLACE.search(description)
+        merchant = _PLACE.search(description) or _QR_SHOP.search(description)
+        merchant = merchant or _QR_RECIPIENT.search(description)
         phone = _PHONE.search(description)
+        client = _CLIENT.search(description)
         operations.append(
             StatementOperation(
                 bank="alfa",
@@ -104,8 +120,8 @@ def _operations(rows: list[tuple]) -> list[StatementOperation]:
                 amount=_money(str(row[12])),
                 description=description,
                 mcc=mcc.group(1) if mcc else None,
-                merchant=place.group(1).strip() if place else None,
-                counterparty="+7" + "".join(phone.groups()) if phone else None,
+                merchant=merchant.group(1).strip() if merchant else None,
+                counterparty=_counterparty(phone, client),
             )
         )
     return operations
