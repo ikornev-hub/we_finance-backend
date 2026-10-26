@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from we_finance import __version__
 from we_finance.credit.service import CreditError, LoanNotFoundError
 from we_finance.db import check_db
-from we_finance.routers import calculator, loans, money, salary
+from we_finance.routers import auth, calculator, loans, money, salary
 from we_finance.salary.service import ProfileNotFoundError, SalaryError
 from we_finance.schemas import HealthResponse, VersionResponse
 from we_finance.settings import get_app_env
@@ -14,6 +14,7 @@ app.include_router(money.router, prefix="/api/v1")
 app.include_router(calculator.router, prefix="/api/v1")
 app.include_router(loans.router, prefix="/api/v1")
 app.include_router(salary.router, prefix="/api/v1")
+app.include_router(auth.router, prefix="/api/v1")
 
 
 @app.exception_handler(CreditError)
