@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import BinaryIO
 
 import openpyxl
 
@@ -37,10 +38,10 @@ def _money(text: str) -> Decimal:
     return Decimal(text.replace("\xa0", "").replace(" ", "").replace(",", "."))
 
 
-def parse_alfa(path: Path) -> list[StatementOperation]:
+def parse_alfa(source: Path | BinaryIO) -> list[StatementOperation]:
     """Выписка Альфа-Банка (XLSX): таблица начинается под строкой «Дата операции»."""
     rows = list(
-        openpyxl.load_workbook(path, read_only=True, data_only=True).active.iter_rows(
+        openpyxl.load_workbook(source, read_only=True, data_only=True).active.iter_rows(
             values_only=True
         )
     )

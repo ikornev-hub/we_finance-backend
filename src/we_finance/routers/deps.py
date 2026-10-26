@@ -6,6 +6,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from we_finance.auth.sessions import SessionStore
 from we_finance.credit.repository import LoanRepository, PostgresLoanRepository
+from we_finance.expenses.repository import PostgresExpenseRepository
 from we_finance.salary.repository import PostgresSalaryRepository, SalaryRepository
 from we_finance.settings import get_database_url
 
@@ -44,3 +45,8 @@ def get_repository(user_id: CurrentUser) -> LoanRepository:
 def get_salary_repository(user_id: CurrentUser) -> SalaryRepository:
     """Профиль зарплаты того, кто вошёл."""
     return PostgresSalaryRepository(get_database_url(), user_id)
+
+
+def get_expense_repository(user_id: CurrentUser) -> PostgresExpenseRepository:
+    """Расходы того, кто вошёл."""
+    return PostgresExpenseRepository(get_database_url(), user_id)
