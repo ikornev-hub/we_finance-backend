@@ -15,9 +15,3 @@ class VersionResponse(BaseModel):
 
     version: str
     env: str
-
-
-class MoneyRoundResponse(BaseModel):
-    """Округление до копеек"""
-
-    amount: str
