@@ -1,6 +1,7 @@
 """Разбор банковских выписок в операции одного вида."""
 
 import re
+import zipfile
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 import openpyxl
+from openpyxl.utils.exceptions import InvalidFileException
 
 _DAY = re.compile(r"\d\d\.\d\d\.\d{4}")
 _MCC = re.compile(r"MCC:\s*(\d{4})")
@@ -64,11 +66,14 @@ def _day(text: str) -> date:
 
 def read_alfa(source: Path | BinaryIO) -> Statement:
     """Выписка Альфа-Банка (XLSX): период из шапки, таблица — под строкой «Дата операции»."""
-    rows = list(
-        openpyxl.load_workbook(source, read_only=True, data_only=True).active.iter_rows(
-            values_only=True
-        )
-    )
+    try:
+        book = openpyxl.load_workbook(source, read_only=True, data_only=True)
+        rows = list(book.active.iter_rows(values_only=True))
+    except (zipfile.BadZipFile, InvalidFileException, KeyError, OSError, ValueError) as exc:
+        # Не xlsx, пустой или битый файл (#46).
+        raise StatementFormatError(
+            "Это не выписка Альфа-Банка: файл не открывается как Excel (.xlsx)"
+        ) from exc
     header = next((i for i, row in enumerate(rows) if row and row[0] == "Дата операции"), None)
     if header is None:
         raise StatementFormatError("Это не выписка Альфа-Банка: нет таблицы «Дата операции»")
@@ -84,7 +89,7 @@ def read_alfa(source: Path | BinaryIO) -> Statement:
     return Statement(
         _day(period.group(1)) if period else None,
         _day(period.group(2)) if period else None,
-        _operations(rows[header + 1 :]),
+        _operations(rows[header + 1 :], first_row=header + 2),
     )
 
 
@@ -100,28 +105,38 @@ def _counterparty(phone: re.Match | None, client: re.Match | None) -> str | None
     return client.group(1).strip() if client else None
 
 
-def _operations(rows: list[tuple]) -> list[StatementOperation]:
-    """Строки таблицы операций → операции; строки не с датой пропускаются."""
+def _operations(rows: list[tuple], first_row: int) -> list[StatementOperation]:
+    """Строки таблицы операций → операции; строки не с датой пропускаются.
+
+    first_row — номер первой строки в Excel, чтобы в ошибке назвать строку (#47).
+    """
     operations = []
-    for row in rows:
+    for number, row in enumerate(rows, start=first_row):
         if not row or not row[0] or not _DAY.fullmatch(str(row[0])):
             continue
-        description = str(row[11])
-        mcc = _MCC.search(description)
-        merchant = _PLACE.search(description) or _QR_SHOP.search(description)
-        merchant = merchant or _QR_RECIPIENT.search(description)
-        phone = _PHONE.search(description)
-        client = _CLIENT.search(description)
-        operations.append(
-            StatementOperation(
-                bank="alfa",
-                bank_operation_id=str(row[3]),
-                day=_day(str(row[0])),
-                amount=_money(str(row[12])),
-                description=description,
-                mcc=mcc.group(1) if mcc else None,
-                merchant=merchant.group(1).strip() if merchant else None,
-                counterparty=_counterparty(phone, client),
-            )
-        )
+        try:
+            operations.append(_operation(row))
+        except (IndexError, ArithmeticError, ValueError) as exc:
+            raise StatementFormatError(
+                f"Строка {number}: не похожа на операцию выписки Альфа-Банка"
+                " (не хватает колонок или сумма не число)"
+            ) from exc
     return operations
+
+
+def _operation(row: tuple) -> StatementOperation:
+    """Одна строка таблицы с датой → операция."""
+    description = str(row[11])
+    mcc = _MCC.search(description)
+    merchant = _PLACE.search(description) or _QR_SHOP.search(description)
+    merchant = merchant or _QR_RECIPIENT.search(description)
+    return StatementOperation(
+        bank="alfa",
+        bank_operation_id=str(row[3]),
+        day=_day(str(row[0])),
+        amount=_money(str(row[12])),
+        description=description,
+        mcc=mcc.group(1) if mcc else None,
+        merchant=merchant.group(1).strip() if merchant else None,
+        counterparty=_counterparty(_PHONE.search(description), _CLIENT.search(description)),
+    )

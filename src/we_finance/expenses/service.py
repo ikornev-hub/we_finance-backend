@@ -53,9 +53,9 @@ def month_range(month: str) -> tuple[date, date]:
     try:
         year, number = (int(part) for part in month.split("-"))
         start = date(year, number, 1)
+        end = date(year + number // 12, number % 12 + 1, 1)  # 9999-12 → 10000 год (#48)
     except ValueError as exc:
-        raise ExpenseError(f"Месяц {month} не похож на ГГГГ-ММ") from exc
-    end = date(year + number // 12, number % 12 + 1, 1)
+        raise ExpenseError(f"Месяц {month} не похож на ГГГГ-ММ или вне диапазона") from exc
     return start, end
 
 
