@@ -34,7 +34,7 @@ def login(body: LoginIn) -> TokenOut:
     return TokenOut(token=SessionStore(url).create(user[0]))
 
 
-TEST_LOGIN = "tester"
+TEST_LOGIN = "owner"  # решение 2026-10-26: на dev и test — сразу в учётку владельца
 
 
 @router.post("/test-login", summary="Войти в тестовую учётку (только dev и test)")
