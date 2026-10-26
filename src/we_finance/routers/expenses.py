@@ -190,9 +190,10 @@ def month_report(
     salary_repo: Annotated[SalaryRepository, Depends(get_salary_repository)],
     loan_repo: Annotated[LoanRepository, Depends(get_repository)],
     month: Annotated[str, Path(pattern=r"^\d{4}-\d{2}$", examples=["2026-10"])],
+    today: Annotated[date, Depends(get_today)],
 ) -> MonthReport:
-    """Факт по выписке; прогноз — больше из плана («Доходы», «Кредиты», правила жилья) и факта."""
-    return service.month_report(repo, salary_repo, loan_repo, month)
+    """Факт по выписке; прогноз — больше из плана и факта, у прошедшего месяца — факт."""
+    return service.month_report(repo, salary_repo, loan_repo, month, today)
 
 
 # ---------- сверка доходов ----------

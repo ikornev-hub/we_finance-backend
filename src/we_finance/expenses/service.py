@@ -234,7 +234,7 @@ def month_plan(
             continue
         rows, _ = calculate(stored.loan, stored.prepayments)
         credit += sum((row.payment for row in rows if start <= row.date < end), Decimal("0"))
-    return MonthPlan(income, credit, repo.housing_plan())
+    return MonthPlan(income, credit, repo.housing_plan(start, end))
 
 
 def month_report(
@@ -242,11 +242,17 @@ def month_report(
     salary_repo: SalaryRepository,
     loan_repo: LoanRepository,
     month: str,
+    today: date,
 ) -> MonthReport:
-    """Месяц: факт по выписке, прогноз «план + факт», доли и границы категорий."""
+    """Месяц: факт по выписке, прогноз «план + факт», доли и границы категорий.
+
+    Месяц закончился (сегодня уже после него) — прогноз равен факту, план не нужен.
+    """
     start, end = month_range(month)
-    plan = month_plan(repo, salary_repo, loan_repo, month)
-    return build_month(month, repo.limited_tree(), repo.month_flows(start, end), plan)
+    closed = end <= today
+    plan = MonthPlan() if closed else month_plan(repo, salary_repo, loan_repo, month)
+    flows = repo.month_flows(start, end)
+    return build_month(month, repo.limited_tree(), flows, plan, closed)
 
 
 # ---------- сверка доходов ----------

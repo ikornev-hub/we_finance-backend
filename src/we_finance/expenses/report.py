@@ -97,6 +97,7 @@ class MonthReport:  # pylint: disable=too-many-instance-attributes  # поля =
     disposable: Decimal  # по факту выписки
     uncategorized_count: int
     has_statement: bool
+    closed: bool  # месяц закончился: прогноз = факт, план не подмешивается
     warnings: list[str]
     forecast: MonthForecast
     categories: list[MonthCategory]
@@ -185,21 +186,47 @@ def _warnings(month: str, has_statement: bool, base: Decimal, limits_total: Deci
     return warnings
 
 
+def _month_forecast(
+    planned: tuple[Decimal, Decimal, Decimal], categories: list[MonthCategory]
+) -> MonthForecast:
+    """Блок прогноза: (доход, кредит, жильё), потрачено и распределено из располагаемого."""
+    income, credit, housing = planned
+    base = _money(income - credit - housing)
+    spent = sum((c.amount for c in categories if c.system_code not in REQUIRED), ZERO)
+    limits_total = sum((c.target for c in categories if c.target is not None), ZERO)
+    return MonthForecast(
+        income=_money(income),
+        credit=_money(credit),
+        housing=_money(housing),
+        disposable=base,
+        spent=_money(spent),
+        can_spend=_money(base - spent),
+        limits_total=_money(limits_total),
+        unallocated=_money(base - limits_total),
+    )
+
+
 def build_month(
-    month: str, tree: list[LimitedCategory], flows: dict[str, Flow], plan: MonthPlan
+    month: str,
+    tree: list[LimitedCategory],
+    flows: dict[str, Flow],
+    plan: MonthPlan,
+    closed: bool = False,
 ) -> MonthReport:
-    """Отчёт месяца по дереву, движению по категориям и плану."""
+    """Отчёт месяца по дереву, движению по категориям и плану.
+
+    Закрытый месяц план не учитывает: иначе платёж, лёгший не в ту категорию
+    (аренда в «Неопределённых»), считается дважды — планом и тратой.
+    """
+    planned = _forecast(tree, flows, MonthPlan() if closed else plan)
+    base = _money(planned[0] - planned[1] - planned[2])
     income = _fact(tree, flows, "income")
     spending = [category for category in tree if category.system_code != "income"]
     expenses = sum((_total(flows, c, "outflow") for c in spending), ZERO)
-    forecast_income, forecast_credit, forecast_housing = _forecast(tree, flows, plan)
-    base = _money(forecast_income - forecast_credit - forecast_housing)
-
     categories = sorted(
         (_category(c, flows, base) for c in spending), key=lambda c: (-c.amount, c.name)
     )
-    spent = sum((c.amount for c in categories if c.system_code not in REQUIRED), ZERO)
-    limits_total = sum((c.target for c in categories if c.target is not None), ZERO)
+    forecast = _month_forecast(planned, categories)
     has_statement = any(flow.count for flow in flows.values())
     return MonthReport(
         month=month,
@@ -211,16 +238,8 @@ def build_month(
             flows.get(c.id, Flow()).count for c in tree if c.system_code == "uncategorized"
         ),
         has_statement=has_statement,
-        warnings=_warnings(month, has_statement, base, limits_total),
-        forecast=MonthForecast(
-            income=_money(forecast_income),
-            credit=_money(forecast_credit),
-            housing=_money(forecast_housing),
-            disposable=base,
-            spent=_money(spent),
-            can_spend=_money(base - spent),
-            limits_total=_money(limits_total),
-            unallocated=_money(base - limits_total),
-        ),
+        closed=closed,
+        warnings=_warnings(month, has_statement, base, forecast.limits_total),
+        forecast=forecast,
         categories=categories,
     )

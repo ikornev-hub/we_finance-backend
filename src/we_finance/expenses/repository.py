@@ -380,16 +380,23 @@ class _Categories(_Postgres):
             for c in self.categories()
         ]
 
-    def housing_plan(self) -> Decimal:
-        """Жильё по плану: суммы правил с суммой, которые ведут в «Жильё» (аренда 30 000)."""
+    def housing_plan(self, start: date, end: date) -> Decimal:
+        """Жильё по плану за [start, end): суммы правил с суммой, ведущих в «Жильё».
+
+        Получателю в периоде уже переводили — правило не считается: платёж уже в факте,
+        в какой бы категории он ни лежал (иначе аренда в «Неопределённых» учтётся дважды).
+        """
         with self._cursor() as cur:
             cur.execute(
                 "SELECT coalesce(sum(r.amount), 0) FROM expense_rules r"
                 " JOIN expense_categories c ON c.id = r.category_id"
                 " LEFT JOIN expense_categories p ON p.id = c.parent_id"
-                " WHERE r.user_id = %s AND r.amount IS NOT NULL"
-                " AND 'housing' IN (c.system_code, p.system_code)",
-                (self._user_id,),
+                " WHERE r.user_id = %(user)s AND r.amount IS NOT NULL"
+                " AND 'housing' IN (c.system_code, p.system_code)"
+                " AND NOT EXISTS (SELECT 1 FROM expense_operations o"
+                " WHERE o.user_id = %(user)s AND o.counterparty = r.pattern AND o.amount < 0"
+                " AND o.operated_at >= %(start)s AND o.operated_at < %(end)s)",
+                {"user": self._user_id, "start": start, "end": end},
             )
             return cur.fetchone()[0]
 
