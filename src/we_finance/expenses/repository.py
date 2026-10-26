@@ -13,7 +13,9 @@ from psycopg2 import errorcodes
 from we_finance.expenses.categories import (
     CASH,
     CREDIT,
+    DEFAULT_GROUP,
     DEFAULT_TREE,
+    GROUPS,
     HOUSING,
     INCOME,
     OWN_TRANSFER,
@@ -24,7 +26,7 @@ from we_finance.expenses.categories import (
 from we_finance.expenses.classify import OperationType, Owner
 from we_finance.expenses.errors import ExpenseError
 from we_finance.expenses.income_check import Receipt
-from we_finance.expenses.report import Flow, LimitedCategory
+from we_finance.expenses.report import Flow, LimitedCategory, LimitedGroup
 from we_finance.expenses.statement import StatementOperation
 
 # Системные категории: на них опирается автоматика, удалять нельзя (бизнес-требования).
@@ -97,7 +99,7 @@ class CategoryChild:
 
 
 @dataclass(frozen=True)
-class StoredCategory:
+class StoredCategory:  # pylint: disable=too-many-instance-attributes  # поля = контракт API
     """Категория с подкатегориями; parent_id — у подкатегории."""
 
     id: str
@@ -106,7 +108,20 @@ class StoredCategory:
     system_code: str | None
     target_share: Decimal | None
     target_amount: Decimal | None
+    group_id: str | None  # у верхнего уровня; None — «Служебные»
     children: list[CategoryChild]
+
+
+@dataclass(frozen=True)
+class StoredGroup:
+    """Группа трат из базы и её категории верхнего уровня."""
+
+    id: str
+    code: str
+    name: str
+    target_share: Decimal | None
+    target_amount: Decimal | None
+    category_ids: list[str]
 
 
 @dataclass(frozen=True)
@@ -220,6 +235,48 @@ class _Categories(_Postgres):
         for name, code in SYSTEM_CODES.items():
             if code not in have:
                 self._add_system_category(cur, name, code)
+        self._ensure_groups(cur)
+
+    def _ensure_groups(self, cur) -> None:
+        """Групп ещё нет — завести четыре и разложить категории по стартовой раскладке.
+
+        Делается один раз: дальше раскладку меняет пользователь, а None у категории значит
+        «Служебные», а не «не разложено». Заодно «Штрафы» переезжают из «Машины»
+        в «Налоги и штрафы» (решение 2026-10-26).
+        """
+        cur.execute("SELECT count(*) FROM expense_groups WHERE user_id = %s", (self._user_id,))
+        if cur.fetchone()[0]:
+            return
+        ids = {}
+        for code, name in GROUPS.items():
+            ids[code] = uuid4().hex
+            cur.execute(
+                "INSERT INTO expense_groups (id, user_id, code, name) VALUES (%s, %s, %s, %s)",
+                (ids[code], self._user_id, code, name),
+            )
+        by_code = {code: name for name, code in SYSTEM_CODES.items()}
+        cur.execute(
+            "SELECT id, name, system_code FROM expense_categories"
+            " WHERE user_id = %s AND parent_id IS NULL",
+            (self._user_id,),
+        )
+        for category_id, name, system_code in cur.fetchall():
+            key = by_code.get(system_code, name) if system_code else name
+            code = DEFAULT_GROUP.get(key, "managed")
+            cur.execute(
+                "UPDATE expense_categories SET group_id = %s WHERE id = %s",
+                (ids[code] if code else None, category_id),
+            )
+        cur.execute(
+            "UPDATE expense_categories fine SET parent_id = tax.id"
+            " FROM expense_categories car, expense_categories tax"
+            " WHERE fine.user_id = %(user)s AND fine.name = 'Штрафы' AND fine.parent_id = car.id"
+            " AND car.name = 'Машина' AND car.parent_id IS NULL AND car.user_id = %(user)s"
+            " AND tax.name = 'Налоги и штрафы' AND tax.parent_id IS NULL AND tax.user_id = %(user)s"
+            " AND NOT EXISTS (SELECT 1 FROM expense_categories x"
+            " WHERE x.parent_id = tax.id AND x.name = 'Штрафы')",
+            {"user": self._user_id},
+        )
 
     def _add_system_category(self, cur, name: str, code: str) -> None:
         """Системная категория у старого пользователя; есть своя с таким именем — она и станет ею.
@@ -277,7 +334,7 @@ class _Categories(_Postgres):
         with self._cursor() as cur:
             self._ensure_tree(cur)
             cur.execute(
-                "SELECT id, parent_id, name, system_code, target_share, target_amount"
+                "SELECT id, parent_id, name, system_code, target_share, target_amount, group_id"
                 " FROM expense_categories"
                 " WHERE user_id = %s ORDER BY system_code IS NOT NULL, name",
                 (self._user_id,),
@@ -289,9 +346,9 @@ class _Categories(_Postgres):
                 children.setdefault(parent_id, []).append(CategoryChild(category_id, name))
         return [
             StoredCategory(
-                category_id, name, None, code, share, amount, children.get(category_id, [])
+                category_id, name, None, code, share, amount, group, children.get(category_id, [])
             )
-            for category_id, parent_id, name, code, share, amount in rows
+            for category_id, parent_id, name, code, share, amount, group in rows
             if parent_id is None
         ]
 
@@ -299,7 +356,7 @@ class _Categories(_Postgres):
         """Категория пользователя с подкатегориями; нет — None."""
         with self._cursor() as cur:
             cur.execute(
-                "SELECT id, name, parent_id, system_code, target_share, target_amount"
+                "SELECT id, name, parent_id, system_code, target_share, target_amount, group_id"
                 " FROM expense_categories WHERE user_id = %s AND id = %s",
                 (self._user_id, category_id),
             )
@@ -332,16 +389,23 @@ class _Categories(_Postgres):
             )
             return cur.fetchone()[0]
 
-    def add_category(self, name: str, parent_id: str | None, target_share: Decimal | None) -> str:
+    def add_category(
+        self,
+        name: str,
+        parent_id: str | None,
+        target_share: Decimal | None,
+        group_id: str | None = None,
+    ) -> str:
         """Новая категория или подкатегория; такое имя на этом уровне уже есть — ExpenseError."""
         category_id = uuid4().hex
         try:
             with self._cursor() as cur:
                 self._ensure_tree(cur)
                 cur.execute(
-                    "INSERT INTO expense_categories (id, user_id, parent_id, name, target_share)"
-                    " VALUES (%s, %s, %s, %s, %s)",
-                    (category_id, self._user_id, parent_id, name, target_share),
+                    "INSERT INTO expense_categories"
+                    " (id, user_id, parent_id, name, target_share, group_id)"
+                    " VALUES (%s, %s, %s, %s, %s, %s)",
+                    (category_id, self._user_id, parent_id, name, target_share, group_id),
                 )
         except psycopg2.IntegrityError as exc:
             if exc.pgcode != errorcodes.UNIQUE_VIOLATION:
@@ -374,7 +438,8 @@ class _Categories(_Postgres):
             )
 
     def limited_tree(self) -> list[LimitedCategory]:
-        """Дерево для отчёта месяца: границы и подкатегории."""
+        """Дерево для отчёта месяца: группа, границы и подкатегории."""
+        codes = {group.id: group.code for group in self.groups()}
         return [
             LimitedCategory(
                 c.id,
@@ -383,29 +448,88 @@ class _Categories(_Postgres):
                 c.target_share,
                 c.target_amount,
                 [(child.id, child.name) for child in c.children],
+                codes.get(c.group_id),
             )
             for c in self.categories()
         ]
 
-    def housing_plan(self, start: date, end: date) -> Decimal:
-        """Жильё по плану за [start, end): суммы правил с суммой, ведущих в «Жильё».
+    # ---------- группы ----------
 
-        Получателю в периоде уже переводили — правило не считается: платёж уже в факте,
-        в какой бы категории он ни лежал (иначе аренда в «Неопределённых» учтётся дважды).
+    def groups(self) -> list[StoredGroup]:
+        """Четыре группы в порядке отчёта, у каждой — её категории верхнего уровня."""
+        with self._cursor() as cur:
+            self._ensure_tree(cur)
+            cur.execute(
+                "SELECT g.id, g.code, g.name, g.target_share, g.target_amount,"
+                " coalesce(array_agg(c.id ORDER BY c.name) FILTER (WHERE c.id IS NOT NULL), '{}')"
+                " FROM expense_groups g"
+                " LEFT JOIN expense_categories c ON c.group_id = g.id AND c.parent_id IS NULL"
+                " WHERE g.user_id = %s GROUP BY g.id",
+                (self._user_id,),
+            )
+            rows = [StoredGroup(*row) for row in cur.fetchall()]
+        order = list(GROUPS)
+        return sorted(rows, key=lambda group: order.index(group.code))
+
+    def group(self, group_id: str) -> StoredGroup | None:
+        """Группа пользователя; нет — None."""
+        return next((group for group in self.groups() if group.id == group_id), None)
+
+    def limited_groups(self) -> list[LimitedGroup]:
+        """Группы для отчёта месяца."""
+        return [
+            LimitedGroup(g.id, g.code, g.name, g.target_share, g.target_amount)
+            for g in self.groups()
+        ]
+
+    def rename_group(self, group_id: str, name: str) -> None:
+        """Новое имя группы."""
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE expense_groups SET name = %s WHERE user_id = %s AND id = %s",
+                (name, self._user_id, group_id),
+            )
+
+    def set_group_limit(
+        self, group_id: str, target_share: Decimal | None, target_amount: Decimal | None
+    ) -> None:
+        """Граница группы: доля располагаемого или сумма (одно из двух)."""
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE expense_groups SET target_share = %s, target_amount = %s"
+                " WHERE user_id = %s AND id = %s",
+                (target_share, target_amount, self._user_id, group_id),
+            )
+
+    def set_category_group(self, category_id: str, group_id: str | None) -> None:
+        """Перенести категорию верхнего уровня в группу; None — «Служебные»."""
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE expense_categories SET group_id = %s WHERE user_id = %s AND id = %s",
+                (group_id, self._user_id, category_id),
+            )
+
+    def mandatory_plan(self, start: date, end: date) -> dict[str, Decimal]:
+        """Обязательные по плану за [start, end): категория → суммы правил с суммой.
+
+        Правило ведёт в категорию группы «Обязательные» (или её подкатегорию). Получателю
+        в периоде уже переводили — правило не считается: платёж уже в факте, в какой бы
+        категории он ни лежал (иначе аренда в «Неопределённых» учтётся дважды).
         """
         with self._cursor() as cur:
             cur.execute(
-                "SELECT coalesce(sum(r.amount), 0) FROM expense_rules r"
+                "SELECT coalesce(p.id, c.id), sum(r.amount) FROM expense_rules r"
                 " JOIN expense_categories c ON c.id = r.category_id"
                 " LEFT JOIN expense_categories p ON p.id = c.parent_id"
-                " WHERE r.user_id = %(user)s AND r.amount IS NOT NULL"
-                " AND 'housing' IN (c.system_code, p.system_code)"
+                " JOIN expense_groups g ON g.id = coalesce(p.group_id, c.group_id)"
+                " WHERE r.user_id = %(user)s AND r.amount IS NOT NULL AND g.code = 'mandatory'"
                 " AND NOT EXISTS (SELECT 1 FROM expense_operations o"
                 " WHERE o.user_id = %(user)s AND o.counterparty = r.pattern AND o.amount < 0"
-                " AND o.operated_at >= %(start)s AND o.operated_at < %(end)s)",
+                " AND o.operated_at >= %(start)s AND o.operated_at < %(end)s)"
+                " GROUP BY coalesce(p.id, c.id)",
                 {"user": self._user_id, "start": start, "end": end},
             )
-            return cur.fetchone()[0]
+            return dict(cur.fetchall())
 
     def delete_category(self, category_id: str, move_to: str) -> None:
         """Удалить с подкатегориями: их операции — в move_to, их правила — удалить."""

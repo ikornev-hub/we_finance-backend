@@ -1,6 +1,6 @@
-"""Отчёт месяца: факт по выписке, прогноз «план + факт», доли и границы (system/expenses.md §2.6).
+"""Отчёт месяца: факт, прогноз «план + факт», группы, доли и границы (system/expenses.md §2.6).
 
-Чистые функции: на входе дерево категорий, суммы операций и план, на выходе отчёт.
+Чистые функции: на входе группы, дерево категорий, суммы операций и план, на выходе отчёт.
 Ни базы, ни HTTP — удобно проверять unit-тестами на эталоне.
 """
 
@@ -11,8 +11,9 @@ CENT = Decimal("0.01")
 SHARE = Decimal("0.0001")
 ZERO = Decimal("0")
 
-# Обязательные траты: вычитаются из дохода, долей и границ у них нет.
-REQUIRED = ("credit", "housing")
+MANDATORY = "mandatory"  # вычитаются из дохода; долей от располагаемого и границ нет
+SERVICE = "service"  # «Служебные»: категории без группы (Переводы себе, Неопределённые)
+GROUP_ORDER = (MANDATORY, "managed", "unmanaged", "purchases", SERVICE)
 
 
 @dataclass(frozen=True)
@@ -25,8 +26,19 @@ class Flow:
 
 
 @dataclass(frozen=True)
-class LimitedCategory:
-    """Категория верхнего уровня, как её знает отчёт: граница и подкатегории."""
+class LimitedGroup:
+    """Группа, как её знает отчёт: код, имя, граница."""
+
+    id: str
+    code: str
+    name: str
+    target_share: Decimal | None = None
+    target_amount: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class LimitedCategory:  # pylint: disable=too-many-instance-attributes  # поля = то, что знает отчёт
+    """Категория верхнего уровня, как её знает отчёт: группа, граница и подкатегории."""
 
     id: str
     name: str
@@ -34,15 +46,16 @@ class LimitedCategory:
     target_share: Decimal | None
     target_amount: Decimal | None
     children: list[tuple[str, str]] = field(default_factory=list)  # (id, name)
+    group_code: str | None = None  # None — «Служебные»
 
 
 @dataclass(frozen=True)
 class MonthPlan:
-    """Что ожидается в месяце: доход по «Доходам», платежи по «Кредитам», жильё по правилам."""
+    """Что ожидается: доход по «Доходам», платежи по «Кредитам», обязательные по правилам."""
 
     income: Decimal = ZERO
     credit: Decimal = ZERO
-    housing: Decimal = ZERO
+    mandatory: dict[str, Decimal] = field(default_factory=dict)  # категория → по правилам
 
 
 @dataclass(frozen=True)
@@ -62,6 +75,7 @@ class MonthCategory:  # pylint: disable=too-many-instance-attributes  # поля
     id: str
     name: str
     system_code: str | None
+    group_code: str
     amount: Decimal
     share: Decimal | None
     limit_mode: str | None  # "share" | "amount" | None — как задана граница
@@ -73,14 +87,30 @@ class MonthCategory:  # pylint: disable=too-many-instance-attributes  # поля
 
 
 @dataclass(frozen=True)
+class MonthGroup:  # pylint: disable=too-many-instance-attributes  # поля = контракт API
+    """Группа месяца: сумма её категорий, доля, граница и сами категории."""
+
+    id: str | None  # у «Служебных» — None
+    code: str
+    name: str
+    amount: Decimal
+    share: Decimal | None  # у «Обязательных» — от дохода, у остальных — от располагаемого
+    limit_mode: str | None
+    target_share: Decimal | None
+    target: Decimal | None
+    deviation: Decimal | None
+    remaining: Decimal | None
+    categories: list[MonthCategory]
+
+
+@dataclass(frozen=True)
 class MonthForecast:  # pylint: disable=too-many-instance-attributes  # поля = контракт API
     """Прогноз месяца «план + факт»: от него считаются доли и границы."""
 
     income: Decimal
-    credit: Decimal
-    housing: Decimal
-    disposable: Decimal  # доход − кредит − жильё
-    spent: Decimal  # потрачено из располагаемого (всё, кроме кредита и жилья)
+    mandatory: Decimal  # Σ обязательных: кредит, жильё, связь, близкие…
+    disposable: Decimal  # доход − обязательные
+    spent: Decimal  # потрачено из располагаемого (всё, кроме обязательных)
     can_spend: Decimal  # располагаемый − потрачено
     limits_total: Decimal
     unallocated: Decimal  # располагаемый − сумма границ
@@ -100,6 +130,7 @@ class MonthReport:  # pylint: disable=too-many-instance-attributes  # поля =
     closed: bool  # месяц закончился: прогноз = факт, план не подмешивается
     warnings: list[str]
     forecast: MonthForecast
+    groups: list[MonthGroup]
     categories: list[MonthCategory]
 
 
@@ -108,7 +139,7 @@ def _money(value: Decimal) -> Decimal:
 
 
 def _share(amount: Decimal, base: Decimal) -> Decimal | None:
-    """Доля от располагаемого; располагаемый ≤ 0 — доли не считаются."""
+    """Доля от базы; база ≤ 0 — доли не считаются."""
     return (amount / base).quantize(SHARE, rounding=ROUND_HALF_UP) if base > 0 else None
 
 
@@ -118,26 +149,33 @@ def _total(flows: dict[str, Flow], category: LimitedCategory, attr: str) -> Deci
     return sum((getattr(flows.get(i, Flow()), attr) for i in ids), ZERO)
 
 
-def _limit(category: LimitedCategory, base: Decimal):
+def _limit(item: LimitedCategory | LimitedGroup, base: Decimal):
     """(как задана, доля, сумма) границы на этот месяц."""
-    if category.target_amount is not None:
-        return "amount", _share(category.target_amount, base), _money(category.target_amount)
-    if category.target_share is not None:
-        target = _money(category.target_share * base) if base > 0 else None
-        return "share", category.target_share, target
+    if item.target_amount is not None:
+        return "amount", _share(item.target_amount, base), _money(item.target_amount)
+    if item.target_share is not None:
+        target = _money(item.target_share * base) if base > 0 else None
+        return "share", item.target_share, target
     return None, None, None
+
+
+def _group_code(category: LimitedCategory) -> str:
+    return category.group_code or SERVICE
 
 
 def _category(category: LimitedCategory, flows: dict[str, Flow], base: Decimal) -> MonthCategory:
     amount = _money(_total(flows, category, "outflow"))
-    required = category.system_code in REQUIRED
-    mode, target_share, target = (None, None, None) if required else _limit(category, base)
+    code = _group_code(category)
+    mandatory = code == MANDATORY
+    limited = code not in (MANDATORY, SERVICE)
+    mode, target_share, target = _limit(category, base) if limited else (None, None, None)
     return MonthCategory(
         id=category.id,
         name=category.name,
         system_code=category.system_code,
+        group_code=code,
         amount=amount,
-        share=None if required else _share(amount, base),
+        share=None if mandatory else _share(amount, base),
         limit_mode=mode,
         target_share=target_share,
         target=target,
@@ -148,56 +186,113 @@ def _category(category: LimitedCategory, flows: dict[str, Flow], base: Decimal) 
                 child_id,
                 name,
                 child_amount := _money(flows.get(child_id, Flow()).outflow),
-                None if required else _share(child_amount, base),
+                None if mandatory else _share(child_amount, base),
             )
             for child_id, name in category.children
         ],
     )
 
 
-def _fact(tree: list[LimitedCategory], flows: dict[str, Flow], code: str) -> Decimal:
-    """Факт системной категории: доход — чистый приток, остальные — отток."""
-    category = next((c for c in tree if c.system_code == code), None)
-    if category is None:
-        return ZERO
-    outflow = _total(flows, category, "outflow")
-    return _total(flows, category, "inflow") - outflow if code == "income" else outflow
-
-
-def _forecast(
-    tree: list[LimitedCategory], flows: dict[str, Flow], plan: MonthPlan
-) -> tuple[Decimal, Decimal, Decimal]:
-    """(доход, кредит, жильё) прогноза: больше из плана и факта."""
-    return (
-        max(plan.income, _fact(tree, flows, "income")),
-        max(plan.credit, _fact(tree, flows, "credit")),
-        max(plan.housing, _fact(tree, flows, "housing")),
+def _group(
+    group: LimitedGroup, categories: list[MonthCategory], base: Decimal, income: Decimal
+) -> MonthGroup:
+    amount = sum((c.amount for c in categories), ZERO)
+    limited = group.code not in (MANDATORY, SERVICE)
+    mode, target_share, target = _limit(group, base) if limited else (None, None, None)
+    return MonthGroup(
+        id=group.id or None,
+        code=group.code,
+        name=group.name,
+        amount=_money(amount),
+        share=_share(amount, income if group.code == MANDATORY else base),
+        limit_mode=mode,
+        target_share=target_share,
+        target=target,
+        deviation=None if target is None else amount - target,
+        remaining=None if target is None else target - amount,
+        categories=sorted(categories, key=lambda c: (-c.amount, c.name)),
     )
 
 
-def _warnings(month: str, has_statement: bool, base: Decimal, limits_total: Decimal) -> list[str]:
+def _group_limit(group: MonthGroup) -> Decimal:
+    """Сколько группа забирает из располагаемого: своя граница или сумма границ категорий."""
+    if group.target is not None:
+        return group.target
+    return sum((c.target for c in group.categories if c.target is not None), ZERO)
+
+
+def _warnings(
+    month: str, has_statement: bool, base: Decimal, groups: list[MonthGroup]
+) -> list[str]:
     warnings = []
     if not has_statement:
         warnings.append(f"За {month} выписки нет: факт пустой, прогноз — по «Доходам» и «Кредитам»")
+    limits_total = sum((_group_limit(g) for g in groups), ZERO)
     if base <= 0:
         warnings.append("Располагаемый ≤ 0: доли и границы в % не считаются")
     elif limits_total > base:
         warnings.append(f"Границы больше располагаемого на {_money(limits_total - base)}")
+    for group in groups:
+        inner = sum((c.target for c in group.categories if c.target is not None), ZERO)
+        if group.target is not None and inner > group.target:
+            warnings.append(
+                f"«{group.name}»: границы категорий больше границы группы на "
+                f"{_money(inner - group.target)}"
+            )
     return warnings
 
 
+def _forecast_mandatory(
+    mandatory: list[LimitedCategory], flows: dict[str, Flow], plan: MonthPlan
+) -> Decimal:
+    """Обязательные прогноза: по каждой категории больше из плана и факта."""
+    total = ZERO
+    for category in mandatory:
+        planned = (
+            plan.credit
+            if category.system_code == "credit"
+            else plan.mandatory.get(category.id, ZERO)
+        )
+        total += max(planned, _total(flows, category, "outflow"))
+    return total
+
+
+def _income(tree: list[LimitedCategory], flows: dict[str, Flow]) -> Decimal:
+    """Доход по факту: чистый приток категории «Доход» с подкатегориями."""
+    category = next((c for c in tree if c.system_code == "income"), None)
+    if category is None:
+        return ZERO
+    return _total(flows, category, "inflow") - _total(flows, category, "outflow")
+
+
+def _month_groups(
+    groups: list[LimitedGroup], categories: list[MonthCategory], base: Decimal, income: Decimal
+) -> list[MonthGroup]:
+    """Группы в порядке отчёта; «Служебные» — если в них есть категории."""
+    known = {g.code: g for g in groups}
+    return [
+        _group(
+            known.get(code) or LimitedGroup("", code, "Служебные"),
+            [c for c in categories if c.group_code == code],
+            base,
+            income,
+        )
+        for code in GROUP_ORDER
+        if code in known or any(c.group_code == code for c in categories)
+    ]
+
+
 def _month_forecast(
-    planned: tuple[Decimal, Decimal, Decimal], categories: list[MonthCategory]
+    planned: tuple[Decimal, Decimal], categories: list[MonthCategory], groups: list[MonthGroup]
 ) -> MonthForecast:
-    """Блок прогноза: (доход, кредит, жильё), потрачено и распределено из располагаемого."""
-    income, credit, housing = planned
-    base = _money(income - credit - housing)
-    spent = sum((c.amount for c in categories if c.system_code not in REQUIRED), ZERO)
-    limits_total = sum((c.target for c in categories if c.target is not None), ZERO)
+    """Блок прогноза: (доход, обязательные) → располагаемый, потрачено, распределено."""
+    income, mandatory = planned
+    base = _money(income - mandatory)
+    spent = sum((c.amount for c in categories if c.group_code != MANDATORY), ZERO)
+    limits_total = sum((_group_limit(g) for g in groups), ZERO)
     return MonthForecast(
         income=_money(income),
-        credit=_money(credit),
-        housing=_money(housing),
+        mandatory=_money(mandatory),
         disposable=base,
         spent=_money(spent),
         can_spend=_money(base - spent),
@@ -206,40 +301,44 @@ def _month_forecast(
     )
 
 
-def build_month(
+def build_month(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     month: str,
+    groups: list[LimitedGroup],
     tree: list[LimitedCategory],
     flows: dict[str, Flow],
     plan: MonthPlan,
     closed: bool = False,
 ) -> MonthReport:
-    """Отчёт месяца по дереву, движению по категориям и плану.
+    """Отчёт месяца по группам, дереву, движению по категориям и плану.
 
     Закрытый месяц план не учитывает: иначе платёж, лёгший не в ту категорию
     (аренда в «Неопределённых»), считается дважды — планом и тратой.
     """
-    planned = _forecast(tree, flows, MonthPlan() if closed else plan)
-    base = _money(planned[0] - planned[1] - planned[2])
-    income = _fact(tree, flows, "income")
-    spending = [category for category in tree if category.system_code != "income"]
-    expenses = sum((_total(flows, c, "outflow") for c in spending), ZERO)
-    categories = sorted(
-        (_category(c, flows, base) for c in spending), key=lambda c: (-c.amount, c.name)
-    )
-    forecast = _month_forecast(planned, categories)
+    plan = MonthPlan() if closed else plan
+    income = _income(tree, flows)
+    spending = [c for c in tree if c.system_code != "income"]
+    mandatory = [c for c in spending if _group_code(c) == MANDATORY]
+    planned = (max(plan.income, income), _forecast_mandatory(mandatory, flows, plan))
+    base = _money(planned[0] - planned[1])
+    categories = [_category(c, flows, base) for c in spending]
+    month_groups = _month_groups(groups, categories, base, planned[0])
+    expenses = sum((c.amount for c in categories), ZERO)
     has_statement = any(flow.count for flow in flows.values())
     return MonthReport(
         month=month,
         income=_money(income),
         expenses=_money(expenses),
         balance=_money(income - expenses),
-        disposable=_money(income - _fact(tree, flows, "credit") - _fact(tree, flows, "housing")),
+        disposable=_money(
+            income - sum((c.amount for c in categories if c.group_code == MANDATORY), ZERO)
+        ),
         uncategorized_count=sum(
             flows.get(c.id, Flow()).count for c in tree if c.system_code == "uncategorized"
         ),
         has_statement=has_statement,
         closed=closed,
-        warnings=_warnings(month, has_statement, base, forecast.limits_total),
-        forecast=forecast,
-        categories=categories,
+        warnings=_warnings(month, has_statement, base, month_groups),
+        forecast=_month_forecast(planned, categories, month_groups),
+        groups=month_groups,
+        categories=sorted(categories, key=lambda c: (-c.amount, c.name)),
     )

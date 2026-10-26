@@ -20,6 +20,7 @@ from we_finance.expenses.repository import (
     PostgresExpenseRepository,
     StoredAccount,
     StoredCategory,
+    StoredGroup,
     StoredOperation,
     StoredRule,
 )
@@ -147,6 +148,7 @@ def create_category(
     name: str,
     parent_id: str | None,
     limit: tuple[Decimal | None, Decimal | None] = (None, None),
+    group: str | None = None,
 ) -> StoredCategory:
     """Категория верхнего уровня или подкатегория; уровней два, граница — только у верхнего.
 
@@ -162,7 +164,11 @@ def create_category(
             raise ExpenseError("Уровней два: у подкатегории не бывает своих подкатегорий")
         if target_share is not None or target_amount is not None:
             raise ExpenseError("Граница задаётся только категории верхнего уровня")
-    category_id = repo.add_category(name, parent_id, target_share)
+    group_id = None
+    if parent_id is None:  # новая верхнего уровня — в «Управляемые», если не сказано иначе
+        group_id = group or next(g.id for g in repo.groups() if g.code == "managed")
+        _group(repo, group_id)
+    category_id = repo.add_category(name, parent_id, target_share, group_id)
     if target_amount is not None:
         repo.set_limit(category_id, None, target_amount)
     return _category(repo, category_id)
@@ -177,6 +183,12 @@ def update_category(
         if changes["name"] is None:
             raise ExpenseError("Имя категории не может быть пустым")
         repo.rename_category(category_id, str(changes["name"]))
+    if "group_id" in changes:
+        if category.parent_id is not None:
+            raise ExpenseError("Группа задаётся только категории верхнего уровня")
+        if changes["group_id"] is not None:
+            _group(repo, str(changes["group_id"]))
+        repo.set_category_group(category_id, changes["group_id"])  # type: ignore[arg-type]
     if "target_share" in changes or "target_amount" in changes:
         share = changes.get("target_share")
         amount = changes.get("target_amount")
@@ -234,7 +246,7 @@ def month_plan(
             continue
         rows, _ = calculate(stored.loan, stored.prepayments)
         credit += sum((row.payment for row in rows if start <= row.date < end), Decimal("0"))
-    return MonthPlan(income, credit, repo.housing_plan(start, end))
+    return MonthPlan(income, credit, repo.mandatory_plan(start, end))
 
 
 def month_report(
@@ -252,7 +264,7 @@ def month_report(
     closed = end <= today
     plan = MonthPlan() if closed else month_plan(repo, salary_repo, loan_repo, month)
     flows = repo.month_flows(start, end)
-    return build_month(month, repo.limited_tree(), flows, plan, closed)
+    return build_month(month, repo.limited_groups(), repo.limited_tree(), flows, plan, closed)
 
 
 # ---------- сверка доходов ----------
@@ -270,3 +282,35 @@ def income_check(
     window = timedelta(days=10)
     receipts = repo.income_receipts(date(year, 1, 1) - window, date(year + 1, 1, 1) + window)
     return check_income(expected, receipts, repo.statement_periods(), today)
+
+
+# ---------- группы ----------
+
+
+def _group(repo: PostgresExpenseRepository, group_id: str) -> StoredGroup:
+    """Группа пользователя; нет — 422 (это ввод, а не адрес ресурса)."""
+    group = repo.group(group_id)
+    if group is None:
+        raise ExpenseError(f"Группы {group_id} нет")
+    return group
+
+
+def update_group(
+    repo: PostgresExpenseRepository, group_id: str, changes: dict[str, object]
+) -> StoredGroup:
+    """Переименовать группу и/или задать границу; у «Обязательных» границы нет."""
+    group = repo.group(group_id)
+    if group is None:
+        raise ExpenseNotFoundError(f"Группа {group_id} не найдена")
+    if "name" in changes:
+        if changes["name"] is None:
+            raise ExpenseError("Имя группы не может быть пустым")
+        repo.rename_group(group_id, str(changes["name"]))
+    if "target_share" in changes or "target_amount" in changes:
+        share = changes.get("target_share")
+        amount = changes.get("target_amount")
+        _check_limit(share, amount)  # type: ignore[arg-type]
+        if group.code == "mandatory" and (share is not None or amount is not None):
+            raise ExpenseError("У «Обязательных» границы нет: они вычитаются из дохода")
+        repo.set_group_limit(group_id, share, amount)  # type: ignore[arg-type]
+    return repo.group(group_id)

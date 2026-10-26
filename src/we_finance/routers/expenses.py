@@ -18,6 +18,7 @@ from we_finance.expenses.repository import (
     PostgresExpenseRepository,
     StoredAccount,
     StoredCategory,
+    StoredGroup,
     StoredOperation,
 )
 from we_finance.expenses.service import CategoryChange, RulePreview
@@ -88,6 +89,7 @@ class CategoryIn(BaseModel):
 
     name: Name
     parent_id: str | None = None
+    group_id: str | None = None  # верхний уровень; не задана — «Управляемые»
     target_share: Share | None = None
     target_amount: Amount | None = None
 
@@ -101,6 +103,7 @@ class CategoryPatch(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     name: Name | None = None
+    group_id: str | None = None  # null — «Служебные»
     target_share: Share | None = None
     target_amount: Amount | None = None
 
@@ -115,7 +118,11 @@ def list_categories(repo: Repo) -> list[StoredCategory]:
 def create_category(repo: Repo, category: CategoryIn) -> StoredCategory:
     """Категория или подкатегория (уровней два); цель — только у верхнего уровня."""
     return service.create_category(
-        repo, category.name, category.parent_id, (category.target_share, category.target_amount)
+        repo,
+        category.name,
+        category.parent_id,
+        (category.target_share, category.target_amount),
+        category.group_id,
     )
 
 
@@ -208,3 +215,28 @@ def income_check(
 ) -> list[IncomeCheck]:
     """Выплаты года по «Доходам» против поступлений в «Доход»: окно ±5 дней, аванс — по слову."""
     return service.income_check(repo, salary_repo, year, today)
+
+
+# ---------- группы ----------
+
+
+class GroupPatch(BaseModel):
+    """Имя и/или граница группы. Не переданное поле не меняется."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: Name | None = None
+    target_share: Share | None = None
+    target_amount: Amount | None = None
+
+
+@router.get("/groups", summary="Группы трат")
+def list_groups(repo: Repo) -> list[StoredGroup]:
+    """Обязательные, управляемые, неуправляемые, покупки — с категориями и границами."""
+    return repo.groups()
+
+
+@router.patch("/groups/{group_id}", summary="Переименовать группу, задать границу")
+def update_group(repo: Repo, group_id: str, patch: GroupPatch) -> StoredGroup:
+    """Граница — доля располагаемого или сумма; у «Обязательных» границы нет."""
+    return service.update_group(repo, group_id, patch.model_dump(exclude_unset=True))
