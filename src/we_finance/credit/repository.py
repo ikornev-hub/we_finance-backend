@@ -7,6 +7,7 @@
 import os
 import tempfile
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
@@ -17,10 +18,12 @@ from pydantic import TypeAdapter
 from we_finance.credit.models import (
     DayCount,
     Loan,
+    LoanStatus,
     PaymentDayChange,
     Prepayment,
     PrepaymentMode,
     RatePeriod,
+    StatusChange,
     StoredLoan,
 )
 
@@ -45,6 +48,10 @@ class LoanRepository(Protocol):
 
     def add_prepayment(self, loan_id: str, prepayment: Prepayment) -> None:
         """Добавить ЧДП к кредиту. Удалять и менять ЧДП нельзя (сценарий С7)."""
+        ...
+
+    def add_status(self, loan_id: str, status: LoanStatus) -> None:
+        """Записать переход состояния (С8): удалён, завершён, снова активен."""
         ...
 
 
@@ -73,6 +80,13 @@ class InMemoryLoanRepository:
         """Добавить ЧДП: хранимое не меняется, а заменяется новой версией."""
         stored = self._loans[loan_id]
         self._loans[loan_id] = replace(stored, prepayments=(*stored.prepayments, prepayment))
+        self._save()
+
+    def add_status(self, loan_id: str, status: LoanStatus) -> None:
+        """Переход состояния: к истории добавляется запись."""
+        stored = self._loans[loan_id]
+        change = StatusChange(status=status, changed_at=datetime.now(UTC))
+        self._loans[loan_id] = replace(stored, status_history=(*stored.status_history, change))
         self._save()
 
     def _save(self) -> None:
@@ -215,7 +229,16 @@ class PostgresLoanRepository:
                         monthly_fee=row[9],
                         payment_day_changes=day_changes,
                     )
-                    return StoredLoan(loan=loan, prepayments=prepayments)
+                    cur.execute(
+                        "SELECT status, changed_at FROM loan_status_changes"
+                        " WHERE loan_id = %s ORDER BY id",
+                        (loan_id,),
+                    )
+                    history = tuple(
+                        StatusChange(status=LoanStatus(status), changed_at=changed_at)
+                        for status, changed_at in cur.fetchall()
+                    )
+                    return StoredLoan(loan=loan, prepayments=prepayments, status_history=history)
         finally:
             conn.close()
 
@@ -254,3 +277,16 @@ class PostgresLoanRepository:
         finally:
             conn.close()
         return [self.get(loan_id) for loan_id in ids]
+
+    def add_status(self, loan_id: str, status: LoanStatus) -> None:
+        """Записать переход состояния (С8). Таблица только для добавления."""
+        conn = psycopg2.connect(self._url)
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO loan_status_changes (loan_id, status) VALUES (%s, %s)",
+                        (loan_id, status),
+                    )
+        finally:
+            conn.close()

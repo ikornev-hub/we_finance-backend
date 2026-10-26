@@ -10,6 +10,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from we_finance.payment_status import PaymentStatus
 from we_finance.salary.models import AbsenceKind, PaymentKind
 
 EXAMPLE_PROFILE = {
@@ -124,7 +125,8 @@ class PaymentOut(BaseModel):
     gross: Decimal
     tax: Decimal
     net: Decimal
-    received: bool
+    received: bool  # то же, что status == done
+    status: PaymentStatus
 
 
 class MonthTotalOut(BaseModel):

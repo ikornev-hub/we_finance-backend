@@ -3,9 +3,10 @@
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 
 from we_finance.credit import service
+from we_finance.credit.models import LoanStatus
 from we_finance.credit.repository import LoanRepository
 from we_finance.credit.schemas import (
     HistoryEntryOut,
@@ -31,9 +32,14 @@ def create_loan(loan: LoanCreateIn, repo: Repo, today: Today) -> LoanDetailOut:
 
 
 @router.get("", summary="List loans (С2)")
-def list_loans(repo: Repo, today: Today, as_of: date | None = None) -> list[LoanSummaryOut]:
-    """Все кредиты с остатком и датой закрытия на дату."""
-    return service.list_loans(repo, as_of or today)
+def list_loans(
+    repo: Repo,
+    today: Today,
+    as_of: date | None = None,
+    loan_status: Annotated[LoanStatus, Query(alias="status")] = LoanStatus.ACTIVE,
+) -> list[LoanSummaryOut]:
+    """Кредиты в одном состоянии (по умолчанию активные) с остатком и датой закрытия на дату."""
+    return service.list_loans(repo, as_of or today, loan_status)
 
 
 @router.get("/{loan_id}", summary="Loan: start and actual data, totals (С3)")
@@ -74,3 +80,21 @@ def add_prepayment(
 ) -> LoanDetailOut:
     """Внести ЧДП: удалить или изменить его потом нельзя."""
     return service.add_prepayment(repo, loan_id, prepayment, today)
+
+
+@router.post("/{loan_id}/delete", summary="Delete loan softly (С8)")
+def delete_loan(loan_id: str, repo: Repo, today: Today) -> LoanDetailOut:
+    """В архив «Удалённые»: в расчётах больше не участвует, можно восстановить."""
+    return service.delete_loan(repo, loan_id, today)
+
+
+@router.post("/{loan_id}/complete", summary="Complete paid off loan (С8)")
+def complete_loan(loan_id: str, repo: Repo, today: Today) -> LoanDetailOut:
+    """В архив «Завершённые»: только активный и только при остатке 0."""
+    return service.complete_loan(repo, loan_id, today)
+
+
+@router.post("/{loan_id}/restore", summary="Restore deleted loan (С8)")
+def restore_loan(loan_id: str, repo: Repo, today: Today) -> LoanDetailOut:
+    """Вернуть удалённый в то состояние, из которого удалили."""
+    return service.restore_loan(repo, loan_id, today)

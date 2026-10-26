@@ -4,6 +4,7 @@ from dataclasses import asdict, replace
 from datetime import date
 from decimal import Decimal
 
+from we_finance.payment_status import payment_status
 from we_finance.salary.models import Absence, HistoryMonth, Payment, SalaryProfile, SalaryTerms
 from we_finance.salary.repository import SalaryRepository
 from we_finance.salary.schemas import (
@@ -93,7 +94,7 @@ def to_profile(profile_in: SalaryProfileIn) -> SalaryProfile:
 
 
 def _report(profile: SalaryProfile, target_year: int, as_of: date) -> YearReportOut:
-    """Отчёт за год по профилю ядра; received — на дату as_of."""
+    """Отчёт за год по профилю ядра; статус выплат — на дату as_of (сегодняшние — «сегодня»)."""
     try:
         payments = year_report(
             year=target_year,
@@ -106,7 +107,15 @@ def _report(profile: SalaryProfile, target_year: int, as_of: date) -> YearReport
         raise SalaryError(str(error)) from error
     return YearReportOut(
         year=target_year,
-        payments=[PaymentOut(**asdict(p), net=p.net, received=p.date <= as_of) for p in payments],
+        payments=[
+            PaymentOut(
+                **asdict(p),
+                net=p.net,
+                received=p.date < as_of,
+                status=payment_status(p.date, as_of),
+            )
+            for p in payments
+        ],
         months=[MonthTotalOut.model_validate(m) for m in month_totals(payments)],
         gross=sum((p.gross for p in payments), Decimal("0")),
         tax=sum((p.tax for p in payments), Decimal("0")),
