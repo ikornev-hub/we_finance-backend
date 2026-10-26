@@ -90,6 +90,15 @@ _OPERATIONS_SQL = (
 )
 
 
+# Неразобранная операция подходит под правило (kind, pattern) — как categories._matches.
+_UNCATEGORIZED_MATCH = (
+    " c.system_code = 'uncategorized' AND o.user_id = %(user)s"
+    " AND CASE WHEN %(kind)s = 'counterparty' THEN o.counterparty = %(pattern)s"
+    " ELSE position(lower(%(pattern)s)"
+    " IN lower(coalesce(o.merchant, '') || ' ' || o.description)) > 0 END"
+)
+
+
 def _operation(row: tuple) -> StoredOperation:
     """Строка _OPERATIONS_SQL → операция."""
     op_id, day, amount, *texts, kind, category_id, path = row
@@ -335,13 +344,29 @@ class PostgresExpenseRepository:
             )
             return cur.fetchone() is not None
 
+    def similar(self, operation_id: str, rule: tuple[str, str]) -> list[StoredOperation]:
+        """Неразобранные операции, кроме этой, которые правило (match_kind, pattern) заберёт."""
+        with self._cursor() as cur:
+            return self._similar(cur, operation_id, rule)
+
+    def _similar(self, cur, operation_id: str, rule: tuple[str, str]) -> list[StoredOperation]:
+        match_kind, pattern = rule
+        cur.execute(
+            _OPERATIONS_SQL
+            + " WHERE o.id <> %(id)s AND"
+            + _UNCATEGORIZED_MATCH
+            + " ORDER BY o.operated_at, o.bank_operation_id",
+            {"id": operation_id, "user": self._user_id, "kind": match_kind, "pattern": pattern},
+        )
+        return [_operation(row) for row in cur.fetchall()]
+
     def set_category(
         self, operation_id: str, category_id: str, rule: tuple[str, str] | None
-    ) -> StoredRule | None:
+    ) -> tuple[StoredRule | None, list[str]]:
         """Категория операции от пользователя; rule = (match_kind, pattern) — запомнить.
 
         Правило без суммы на тот же шаблон одно: повторное «запомнить» меняет его категорию.
-        Неразобранные операции с тем же шаблоном раскладываются сразу.
+        Неразобранные операции с тем же шаблоном раскладываются сразу — их id во втором поле.
         """
         with self._cursor() as cur:
             cur.execute(
@@ -350,7 +375,7 @@ class PostgresExpenseRepository:
                 (category_id, self._user_id, operation_id),
             )
             if rule is None:
-                return None
+                return None, []
             match_kind, pattern = rule
             cur.execute(
                 "UPDATE expense_rules SET category_id = %s"
@@ -366,20 +391,10 @@ class PostgresExpenseRepository:
                     " VALUES (%s, %s, %s, %s, %s)",
                     (rule_id, self._user_id, match_kind, pattern, category_id),
                 )
+            applied = [op.id for op in self._similar(cur, operation_id, rule)]
             cur.execute(
-                "UPDATE expense_operations o SET category_id = %(category)s,"
-                " category_source = 'rule'"
-                " FROM expense_categories c"
-                " WHERE c.id = o.category_id AND c.system_code = 'uncategorized'"
-                " AND o.user_id = %(user)s"
-                " AND CASE WHEN %(kind)s = 'counterparty' THEN o.counterparty = %(pattern)s"
-                " ELSE position(lower(%(pattern)s)"
-                " IN lower(coalesce(o.merchant, '') || ' ' || o.description)) > 0 END",
-                {
-                    "category": category_id,
-                    "user": self._user_id,
-                    "kind": match_kind,
-                    "pattern": pattern,
-                },
+                "UPDATE expense_operations SET category_id = %s, category_source = 'rule'"
+                " WHERE user_id = %s AND id = ANY(%s)",
+                (category_id, self._user_id, applied),
             )
-        return StoredRule(rule_id, match_kind, pattern, category_id)
+        return StoredRule(rule_id, match_kind, pattern, category_id), applied

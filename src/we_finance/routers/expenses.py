@@ -12,7 +12,7 @@ from we_finance.expenses.repository import (
     PostgresExpenseRepository,
     StoredOperation,
 )
-from we_finance.expenses.service import CategoryChange
+from we_finance.expenses.service import CategoryChange, RulePreview
 from we_finance.routers.deps import get_expense_repository
 
 router = APIRouter(prefix="/expenses", tags=["expenses"])
@@ -46,6 +46,12 @@ def list_operations(
 ) -> list[StoredOperation]:
     """Операции по дате; фильтры: месяц, категория (с подкатегориями), только «Неопределённые»."""
     return service.list_operations(repo, month, category_id, uncategorized)
+
+
+@router.get("/operations/{operation_id}/similar", summary="Что ещё заберёт «запомнить» (Р2)")
+def preview_rule(repo: Repo, operation_id: str) -> RulePreview:
+    """Будущее правило и неразобранные операции, которые лягут в ту же категорию."""
+    return service.preview_rule(repo, operation_id)
 
 
 @router.patch("/operations/{operation_id}", summary="Сменить категорию операции (Р2)")

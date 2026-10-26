@@ -28,10 +28,20 @@ class ExpenseNotFoundError(LookupError):
 
 @dataclass(frozen=True)
 class CategoryChange:
-    """Итог смены категории: операция и правило, если попросили запомнить."""
+    """Итог смены категории: операция, правило и что ещё разложилось по нему."""
 
     operation: StoredOperation
     rule: StoredRule | None
+    applied: list[StoredOperation]
+
+
+@dataclass(frozen=True)
+class RulePreview:
+    """Будущее правило и неразобранные операции, которые оно заберёт; None — нечего помнить."""
+
+    match_kind: str | None
+    pattern: str | None
+    operations: list[StoredOperation]
 
 
 def month_range(month: str) -> tuple[date, date]:
@@ -76,15 +86,35 @@ def change_category(
     repo: PostgresExpenseRepository, operation_id: str, category_id: str, remember: bool
 ) -> CategoryChange:
     """Пользователь выбрал категорию; remember — правило на получателя, иначе на мерчанта."""
-    if repo.operation(operation_id) is None:
-        raise ExpenseNotFoundError(f"Операция {operation_id} не найдена")
+    operation = _get(repo, operation_id)
     if not repo.has_category(category_id):
         raise ExpenseError(f"Категории {category_id} нет")
+    rule = _rule_for(operation) if remember else None
+    stored_rule, applied_ids = repo.set_category(operation_id, category_id, rule)
+    applied = [_get(repo, applied_id) for applied_id in applied_ids]
+    return CategoryChange(_get(repo, operation_id), stored_rule, applied)
+
+
+def preview_rule(repo: PostgresExpenseRepository, operation_id: str) -> RulePreview:
+    """Что будет, если «запомнить» эту операцию: правило и операции, которые лягут туда же."""
+    rule = _rule_for(_get(repo, operation_id))
+    if rule is None:
+        return RulePreview(None, None, [])
+    return RulePreview(*rule, repo.similar(operation_id, rule))
+
+
+def _get(repo: PostgresExpenseRepository, operation_id: str) -> StoredOperation:
+    """Операция пользователя; нет — 404."""
     operation = repo.operation(operation_id)
-    rule = None
-    if remember and operation.counterparty:
-        rule = ("counterparty", operation.counterparty)
-    elif remember and operation.merchant:
-        rule = ("merchant", operation.merchant)
-    stored_rule = repo.set_category(operation_id, category_id, rule)
-    return CategoryChange(repo.operation(operation_id), stored_rule)
+    if operation is None:
+        raise ExpenseNotFoundError(f"Операция {operation_id} не найдена")
+    return operation
+
+
+def _rule_for(operation: StoredOperation) -> tuple[str, str] | None:
+    """Правило запоминает получателя, если он есть, иначе мерчанта; QR без них — нечего помнить."""
+    if operation.counterparty:
+        return "counterparty", operation.counterparty
+    if operation.merchant:
+        return "merchant", operation.merchant
+    return None
