@@ -8,9 +8,11 @@ from decimal import Decimal
 from uuid import uuid4
 
 import psycopg2
+from psycopg2 import errorcodes
 
 from we_finance.expenses.categories import CREDIT, DEFAULT_TREE, INCOME, UNCATEGORIZED, Rule
 from we_finance.expenses.classify import OperationType, Owner
+from we_finance.expenses.errors import ExpenseError
 from we_finance.expenses.statement import StatementOperation
 
 # Системные категории: на них опирается автоматика, удалять нельзя (бизнес-требования).
@@ -20,6 +22,8 @@ SYSTEM_CODES = {
     INCOME: "income",
     "Маркетплейсы": "marketplace",
 }
+# Код системной категории → имя, под которым её знает ядро (пользователь мог переименовать).
+CODE_NAMES = {code: name for name, code in SYSTEM_CODES.items()}
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,39 @@ class StoredOperation:  # pylint: disable=too-many-instance-attributes  # пол
 
 
 @dataclass(frozen=True)
+class CategoryChild:
+    """Подкатегория в дереве."""
+
+    id: str
+    name: str
+
+
+@dataclass(frozen=True)
+class StoredCategory:
+    """Категория с подкатегориями; parent_id — у подкатегории."""
+
+    id: str
+    name: str
+    parent_id: str | None
+    system_code: str | None
+    target_share: Decimal | None
+    children: list[CategoryChild]
+
+
+@dataclass(frozen=True)
+class StoredAccount:
+    """Свой счёт или номер из базы."""
+
+    id: str
+    bank: str
+    name: str
+    kind: str
+    number_tail: str | None
+    phone: str | None
+    loan_id: str | None
+
+
+@dataclass(frozen=True)
 class StoredRule:
     """Правило из базы: «этот получатель / мерчант → категория»."""
 
@@ -107,8 +144,8 @@ def _operation(row: tuple) -> StoredOperation:
     )
 
 
-class PostgresExpenseRepository:
-    """Расходы одного пользователя."""
+class _Postgres:  # pylint: disable=too-few-public-methods  # база для тематических частей
+    """Подключение к базе от имени одного пользователя."""
 
     def __init__(self, database_url: str, user_id: str) -> None:
         self._url = database_url
@@ -124,30 +161,35 @@ class PostgresExpenseRepository:
         finally:
             conn.close()
 
+
+class _Categories(_Postgres):
+    """Дерево категорий пользователя."""
+
     def category_ids(self) -> dict[str, str]:
-        """«Категория» и «Категория/Подкатегория» → id. Категорий нет — заводит стартовое дерево."""
-        conn = psycopg2.connect(self._url)
-        try:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT count(*) FROM expense_categories WHERE user_id = %s",
-                        (self._user_id,),
-                    )
-                    if cur.fetchone()[0] == 0:
-                        self._create_default_tree(cur)
-                    cur.execute(
-                        "SELECT c.id, c.name, p.name FROM expense_categories c"
-                        " LEFT JOIN expense_categories p ON p.id = c.parent_id"
-                        " WHERE c.user_id = %s",
-                        (self._user_id,),
-                    )
-                    return {
-                        (f"{parent}/{name}" if parent else name): category_id
-                        for category_id, name, parent in cur.fetchall()
-                    }
-        finally:
-            conn.close()
+        """«Категория» и «Категория/Подкатегория» → id. Категорий нет — заводит стартовое дерево.
+
+        Системные — ещё и под именем ядра («Кредит»): пользователь мог их переименовать.
+        """
+        with self._cursor() as cur:
+            self._ensure_tree(cur)
+            cur.execute(
+                "SELECT c.id, c.name, p.name, c.system_code FROM expense_categories c"
+                " LEFT JOIN expense_categories p ON p.id = c.parent_id"
+                " WHERE c.user_id = %s",
+                (self._user_id,),
+            )
+            ids = {}
+            for category_id, name, parent, code in cur.fetchall():
+                ids[f"{parent}/{name}" if parent else name] = category_id
+                if code in CODE_NAMES:
+                    ids[CODE_NAMES[code]] = category_id
+            return ids
+
+    def _ensure_tree(self, cur) -> None:
+        """Первый вход в «Расходы» — завести стартовое дерево."""
+        cur.execute("SELECT count(*) FROM expense_categories WHERE user_id = %s", (self._user_id,))
+        if cur.fetchone()[0] == 0:
+            self._create_default_tree(cur)
 
     def _create_default_tree(self, cur) -> None:
         """Стартовое дерево: сначала категория, потом её подкатегории со ссылкой на неё."""
@@ -171,92 +213,130 @@ class PostgresExpenseRepository:
                     (uuid4().hex, self._user_id, parent_id, child),
                 )
 
-    def save_import(
-        self, bank: str, file_name: str, items: list[ClassifiedOperation]
-    ) -> ImportResult:
-        """Сохранить загрузку; операции, которые уже были, пропускаются (UNIQUE в базе)."""
-        ids = self.category_ids()
-        import_id = uuid4().hex
-        new = uncategorized = 0
-        conn = psycopg2.connect(self._url)
-        try:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO expense_imports (id, user_id, bank, file_name)"
-                        " VALUES (%s, %s, %s, %s)",
-                        (import_id, self._user_id, bank, file_name),
-                    )
-                    for item in items:
-                        op = item.operation
-                        cur.execute(
-                            "INSERT INTO expense_operations (id, user_id, import_id, bank,"
-                            " bank_operation_id, operated_at, amount, description, merchant, mcc,"
-                            " counterparty, type, category_id)"
-                            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
-                            " ON CONFLICT (user_id, bank, bank_operation_id) DO NOTHING",
-                            (
-                                uuid4().hex,
-                                self._user_id,
-                                import_id,
-                                op.bank,
-                                op.bank_operation_id,
-                                datetime.combine(op.day, datetime.min.time()),
-                                op.amount,
-                                op.description,
-                                op.merchant,
-                                op.mcc,
-                                op.counterparty,
-                                item.kind,
-                                ids[item.category] if item.category else None,
-                            ),
-                        )
-                        if cur.rowcount == 1:
-                            new += 1
-                            uncategorized += item.category == UNCATEGORIZED
-        finally:
-            conn.close()
-        return ImportResult(import_id, len(items), new, len(items) - new, uncategorized)
+    def categories(self) -> list[StoredCategory]:
+        """Дерево: обычные по имени, системные в конце; подкатегории по имени."""
+        with self._cursor() as cur:
+            self._ensure_tree(cur)
+            cur.execute(
+                "SELECT id, parent_id, name, system_code, target_share FROM expense_categories"
+                " WHERE user_id = %s ORDER BY system_code IS NOT NULL, name",
+                (self._user_id,),
+            )
+            rows = cur.fetchall()
+        children: dict[str, list[CategoryChild]] = {}
+        for category_id, parent_id, name, *_ in rows:
+            if parent_id:
+                children.setdefault(parent_id, []).append(CategoryChild(category_id, name))
+        return [
+            StoredCategory(category_id, name, None, code, share, children.get(category_id, []))
+            for category_id, parent_id, name, code, share in rows
+            if parent_id is None
+        ]
 
-    def add_rule(
-        self, match_kind: str, pattern: str, category: str, amount: Decimal | None = None
-    ) -> None:
-        """Правило «этот получатель / мерчант → категория»."""
-        category_id = self.category_ids()[category]
-        conn = psycopg2.connect(self._url)
-        try:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO expense_rules"
-                        " (id, user_id, match_kind, pattern, amount, category_id)"
-                        " VALUES (%s, %s, %s, %s, %s, %s)",
-                        (uuid4().hex, self._user_id, match_kind, pattern, amount, category_id),
-                    )
-        finally:
-            conn.close()
+    def category(self, category_id: str) -> StoredCategory | None:
+        """Категория пользователя с подкатегориями; нет — None."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT id, name, parent_id, system_code, target_share FROM expense_categories"
+                " WHERE user_id = %s AND id = %s",
+                (self._user_id, category_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            cur.execute(
+                "SELECT id, name FROM expense_categories"
+                " WHERE user_id = %s AND parent_id = %s ORDER BY name",
+                (self._user_id, category_id),
+            )
+            return StoredCategory(*row, [CategoryChild(*child) for child in cur.fetchall()])
 
-    def rules(self) -> list[Rule]:
-        """Правила по приоритету: сначала получатель, потом мерчант, внутри — по очереди."""
-        conn = psycopg2.connect(self._url)
+    def has_category(self, category_id: str) -> bool:
+        """Есть ли у пользователя такая категория."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM expense_categories WHERE user_id = %s AND id = %s",
+                (self._user_id, category_id),
+            )
+            return cur.fetchone() is not None
+
+    def system_category_id(self, code: str) -> str:
+        """id системной категории по коду: "uncategorized", "credit", …"""
+        with self._cursor() as cur:
+            self._ensure_tree(cur)
+            cur.execute(
+                "SELECT id FROM expense_categories WHERE user_id = %s AND system_code = %s",
+                (self._user_id, code),
+            )
+            return cur.fetchone()[0]
+
+    def add_category(self, name: str, parent_id: str | None, target_share: Decimal | None) -> str:
+        """Новая категория или подкатегория; такое имя на этом уровне уже есть — ExpenseError."""
+        category_id = uuid4().hex
         try:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT r.match_kind, r.pattern, r.amount, c.name, p.name"
-                        " FROM expense_rules r"
-                        " JOIN expense_categories c ON c.id = r.category_id"
-                        " LEFT JOIN expense_categories p ON p.id = c.parent_id"
-                        " WHERE r.user_id = %s"
-                        " ORDER BY r.match_kind = 'counterparty' DESC, r.created_at",
-                        (self._user_id,),
-                    )
-                    return [
-                        Rule(kind, pattern, f"{parent}/{name}" if parent else name, amount)
-                        for kind, pattern, amount, name, parent in cur.fetchall()
-                    ]
-        finally:
-            conn.close()
+            with self._cursor() as cur:
+                self._ensure_tree(cur)
+                cur.execute(
+                    "INSERT INTO expense_categories (id, user_id, parent_id, name, target_share)"
+                    " VALUES (%s, %s, %s, %s, %s)",
+                    (category_id, self._user_id, parent_id, name, target_share),
+                )
+        except psycopg2.IntegrityError as exc:
+            if exc.pgcode != errorcodes.UNIQUE_VIOLATION:
+                raise
+            raise ExpenseError(f"Категория «{name}» здесь уже есть") from exc
+        return category_id
+
+    def rename_category(self, category_id: str, name: str) -> None:
+        """Новое имя; занято на этом уровне — ExpenseError."""
+        try:
+            with self._cursor() as cur:
+                cur.execute(
+                    "UPDATE expense_categories SET name = %s WHERE user_id = %s AND id = %s",
+                    (name, self._user_id, category_id),
+                )
+        except psycopg2.IntegrityError as exc:
+            if exc.pgcode != errorcodes.UNIQUE_VIOLATION:
+                raise
+            raise ExpenseError(f"Категория «{name}» здесь уже есть") from exc
+
+    def set_target_share(self, category_id: str, target_share: Decimal | None) -> None:
+        """Цель — доля располагаемого; None — без цели."""
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE expense_categories SET target_share = %s WHERE user_id = %s AND id = %s",
+                (target_share, self._user_id, category_id),
+            )
+
+    def delete_category(self, category_id: str, move_to: str) -> None:
+        """Удалить с подкатегориями: их операции — в move_to, их правила — удалить."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT id FROM expense_categories WHERE user_id = %s AND parent_id = %s",
+                (self._user_id, category_id),
+            )
+            ids = [category_id, *(row[0] for row in cur.fetchall())]
+            cur.execute(
+                "UPDATE expense_operations SET category_id = %s"
+                " WHERE user_id = %s AND category_id = ANY(%s)",
+                (move_to, self._user_id, ids),
+            )
+            cur.execute(
+                "DELETE FROM expense_rules WHERE user_id = %s AND category_id = ANY(%s)",
+                (self._user_id, ids),
+            )
+            cur.execute(
+                "DELETE FROM expense_categories WHERE user_id = %s AND parent_id = %s",
+                (self._user_id, category_id),
+            )
+            cur.execute(
+                "DELETE FROM expense_categories WHERE user_id = %s AND id = %s",
+                (self._user_id, category_id),
+            )
+
+
+class _Accounts(_Postgres):
+    """Свои счета и номера: переводы на них — себе или в кредит."""
 
     def add_account(self, account: NewAccount) -> str:
         """Свой счёт или номер телефона; kind = "credit" — счёт кредита (нужен loan_id)."""
@@ -302,6 +382,138 @@ class PostgresExpenseRepository:
             credit_banks=frozenset(name for kind, _, name in rows if kind == "credit"),
         )
 
+    def accounts(self) -> list[StoredAccount]:
+        """Свои счета и номера: сначала свои, потом кредитные; внутри — по имени."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT id, bank, name, kind, number_tail, phone, loan_id FROM expense_accounts"
+                " WHERE user_id = %s ORDER BY kind DESC, name",
+                (self._user_id,),
+            )
+            return [StoredAccount(*row) for row in cur.fetchall()]
+
+    def account(self, account_id: str) -> StoredAccount | None:
+        """Один счёт пользователя; нет — None."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT id, bank, name, kind, number_tail, phone, loan_id FROM expense_accounts"
+                " WHERE user_id = %s AND id = %s",
+                (self._user_id, account_id),
+            )
+            row = cur.fetchone()
+        return StoredAccount(*row) if row else None
+
+    def delete_account(self, account_id: str) -> bool:
+        """Удалить счёт; False — такого нет."""
+        with self._cursor() as cur:
+            cur.execute(
+                "DELETE FROM expense_accounts WHERE user_id = %s AND id = %s",
+                (self._user_id, account_id),
+            )
+            return cur.rowcount == 1
+
+    def has_loan(self, loan_id: str) -> bool:
+        """Есть ли у пользователя такой кредит (для счёта кредита)."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM loans WHERE user_id = %s AND id = %s", (self._user_id, loan_id)
+            )
+            return cur.fetchone() is not None
+
+
+class PostgresExpenseRepository(_Categories, _Accounts):
+    """Расходы одного пользователя: категории, счета, загрузки, операции, правила."""
+
+    def save_import(
+        self, bank: str, file_name: str, items: list[ClassifiedOperation]
+    ) -> ImportResult:
+        """Сохранить загрузку; операции, которые уже были, пропускаются (UNIQUE в базе)."""
+        ids = self.category_ids()
+        none_id = ids[UNCATEGORIZED]
+        import_id = uuid4().hex
+        new = uncategorized = 0
+        conn = psycopg2.connect(self._url)
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO expense_imports (id, user_id, bank, file_name)"
+                        " VALUES (%s, %s, %s, %s)",
+                        (import_id, self._user_id, bank, file_name),
+                    )
+                    for item in items:
+                        op = item.operation
+                        # Категорию из MCC пользователь переименовал или удалил — разберёт сам.
+                        category_id = ids.get(item.category, none_id) if item.category else None
+                        cur.execute(
+                            "INSERT INTO expense_operations (id, user_id, import_id, bank,"
+                            " bank_operation_id, operated_at, amount, description, merchant, mcc,"
+                            " counterparty, type, category_id)"
+                            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                            " ON CONFLICT (user_id, bank, bank_operation_id) DO NOTHING",
+                            (
+                                uuid4().hex,
+                                self._user_id,
+                                import_id,
+                                op.bank,
+                                op.bank_operation_id,
+                                datetime.combine(op.day, datetime.min.time()),
+                                op.amount,
+                                op.description,
+                                op.merchant,
+                                op.mcc,
+                                op.counterparty,
+                                item.kind,
+                                category_id,
+                            ),
+                        )
+                        if cur.rowcount == 1:
+                            new += 1
+                            uncategorized += category_id == none_id
+        finally:
+            conn.close()
+        return ImportResult(import_id, len(items), new, len(items) - new, uncategorized)
+
+    def add_rule(
+        self, match_kind: str, pattern: str, category: str, amount: Decimal | None = None
+    ) -> None:
+        """Правило «этот получатель / мерчант → категория»."""
+        category_id = self.category_ids()[category]
+        conn = psycopg2.connect(self._url)
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO expense_rules"
+                        " (id, user_id, match_kind, pattern, amount, category_id)"
+                        " VALUES (%s, %s, %s, %s, %s, %s)",
+                        (uuid4().hex, self._user_id, match_kind, pattern, amount, category_id),
+                    )
+        finally:
+            conn.close()
+
+    def rules(self) -> list[Rule]:
+        """Правила по приоритету: сначала получатель, потом мерчант, внутри — по очереди."""
+        conn = psycopg2.connect(self._url)
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT r.match_kind, r.pattern, r.amount, c.name, p.name"
+                        " FROM expense_rules r"
+                        " JOIN expense_categories c ON c.id = r.category_id"
+                        " LEFT JOIN expense_categories p ON p.id = c.parent_id"
+                        " WHERE r.user_id = %s"
+                        " ORDER BY r.match_kind = 'counterparty' DESC, r.created_at",
+                        (self._user_id,),
+                    )
+                    return [
+                        Rule(kind, pattern, f"{parent}/{name}" if parent else name, amount)
+                        for kind, pattern, amount, name, parent in cur.fetchall()
+                    ]
+        finally:
+            conn.close()
+
     def operations(
         self, start: date | None, end: date | None, category_id: str | None, uncategorized: bool
     ) -> list[StoredOperation]:
@@ -334,15 +546,6 @@ class PostgresExpenseRepository:
             )
             row = cur.fetchone()
         return _operation(row) if row else None
-
-    def has_category(self, category_id: str) -> bool:
-        """Есть ли у пользователя такая категория."""
-        with self._cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM expense_categories WHERE user_id = %s AND id = %s",
-                (self._user_id, category_id),
-            )
-            return cur.fetchone() is not None
 
     def similar(self, operation_id: str, rule: tuple[str, str]) -> list[StoredOperation]:
         """Неразобранные операции, кроме этой, которые правило (match_kind, pattern) заберёт."""

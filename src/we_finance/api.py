@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from we_finance import __version__
 from we_finance.credit.service import CreditError, LoanNotFoundError
 from we_finance.db import check_db
-from we_finance.expenses.service import ExpenseError, ExpenseNotFoundError
+from we_finance.expenses.errors import ExpenseError, ExpenseNotFoundError
 from we_finance.expenses.statement import StatementFormatError
 from we_finance.routers import auth, calculator, expenses, loans, salary
 from we_finance.salary.service import ProfileNotFoundError, SalaryError

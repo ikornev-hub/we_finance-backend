@@ -2,28 +2,25 @@
 
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from typing import BinaryIO
 
 from we_finance.expenses.categories import category_for
 from we_finance.expenses.classify import operation_type
+from we_finance.expenses.errors import ExpenseError, ExpenseNotFoundError
 from we_finance.expenses.repository import (
     ClassifiedOperation,
     ImportResult,
+    NewAccount,
     PostgresExpenseRepository,
+    StoredAccount,
+    StoredCategory,
     StoredOperation,
     StoredRule,
 )
 from we_finance.expenses.statement import StatementFormatError, parse_alfa
 
 PARSERS = {"alfa": parse_alfa}
-
-
-class ExpenseError(ValueError):
-    """Ввод противоречит данным пользователя → 422."""
-
-
-class ExpenseNotFoundError(LookupError):
-    """Нет такой операции, категории или счёта (или они чужие) → 404."""
 
 
 @dataclass(frozen=True)
@@ -118,3 +115,73 @@ def _rule_for(operation: StoredOperation) -> tuple[str, str] | None:
     if operation.merchant:
         return "merchant", operation.merchant
     return None
+
+
+# ---------- категории ----------
+
+
+def _category(repo: PostgresExpenseRepository, category_id: str) -> StoredCategory:
+    """Категория пользователя; нет — 404."""
+    category = repo.category(category_id)
+    if category is None:
+        raise ExpenseNotFoundError(f"Категория {category_id} не найдена")
+    return category
+
+
+def create_category(
+    repo: PostgresExpenseRepository,
+    name: str,
+    parent_id: str | None,
+    target_share: Decimal | None,
+) -> StoredCategory:
+    """Категория верхнего уровня или подкатегория; уровней два, цель — только у верхнего."""
+    if parent_id is not None:
+        parent = repo.category(parent_id)
+        if parent is None:
+            raise ExpenseError(f"Родительской категории {parent_id} нет")
+        if parent.parent_id is not None:
+            raise ExpenseError("Уровней два: у подкатегории не бывает своих подкатегорий")
+        if target_share is not None:
+            raise ExpenseError("Цель задаётся только категории верхнего уровня")
+    return _category(repo, repo.add_category(name, parent_id, target_share))
+
+
+def update_category(
+    repo: PostgresExpenseRepository, category_id: str, changes: dict[str, object]
+) -> StoredCategory:
+    """Переименовать и/или задать цель; системные переименовывать можно."""
+    category = _category(repo, category_id)
+    if "name" in changes:
+        if changes["name"] is None:
+            raise ExpenseError("Имя категории не может быть пустым")
+        repo.rename_category(category_id, str(changes["name"]))
+    if "target_share" in changes:
+        if category.parent_id is not None and changes["target_share"] is not None:
+            raise ExpenseError("Цель задаётся только категории верхнего уровня")
+        repo.set_target_share(category_id, changes["target_share"])  # type: ignore[arg-type]
+    return _category(repo, category_id)
+
+
+def delete_category(repo: PostgresExpenseRepository, category_id: str) -> None:
+    """Подкатегория отдаёт операции родителю; категория — в «Неопределённые» с подкатегориями."""
+    category = _category(repo, category_id)
+    if category.system_code is not None:
+        raise ExpenseError(f"«{category.name}» — системная: удалить нельзя, только переименовать")
+    move_to = category.parent_id or repo.system_category_id("uncategorized")
+    repo.delete_category(category_id, move_to)
+
+
+# ---------- свои счета ----------
+
+
+def create_account(repo: PostgresExpenseRepository, account: NewAccount) -> StoredAccount:
+    """Свой счёт или номер; счёт кредита — только к своему кредиту."""
+    if account.loan_id is not None and not repo.has_loan(account.loan_id):
+        raise ExpenseError(f"Кредита {account.loan_id} нет")
+    return repo.account(repo.add_account(account))
+
+
+def delete_account(repo: PostgresExpenseRepository, account_id: str) -> None:
+    """Удалить свой счёт; уже загруженные операции не пересчитываются."""
+    if not repo.delete_account(account_id):
+        raise ExpenseNotFoundError(f"Счёт {account_id} не найден")

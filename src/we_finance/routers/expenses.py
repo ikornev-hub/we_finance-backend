@@ -1,15 +1,19 @@
 """Расходы: выписки, операции, категории, счета (требования system/expenses.md §3)."""
 
+from decimal import Decimal
 from io import BytesIO
-from typing import Annotated
+from typing import Annotated, Literal, Self
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from we_finance.expenses import service
 from we_finance.expenses.repository import (
     ImportResult,
+    NewAccount,
     PostgresExpenseRepository,
+    StoredAccount,
+    StoredCategory,
     StoredOperation,
 )
 from we_finance.expenses.service import CategoryChange, RulePreview
@@ -58,3 +62,102 @@ def preview_rule(repo: Repo, operation_id: str) -> RulePreview:
 def change_category(repo: Repo, operation_id: str, change: CategoryChangeIn) -> CategoryChange:
     """Категория от пользователя; remember — правило, такие же неразобранные разложатся сразу."""
     return service.change_category(repo, operation_id, change.category_id, change.remember)
+
+
+# ---------- категории ----------
+
+Share = Annotated[Decimal, Field(ge=0, le=1, examples=["0.15"])]
+Name = Annotated[str, Field(min_length=1, max_length=60)]
+
+
+class CategoryIn(BaseModel):
+    """Новая категория; parent_id — подкатегория; target_share — цель, доля располагаемого."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: Name
+    parent_id: str | None = None
+    target_share: Share | None = None
+
+
+class CategoryPatch(BaseModel):
+    """Что поменять; target_share: null — убрать цель. Не переданное поле не меняется."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: Name | None = None
+    target_share: Share | None = None
+
+
+@router.get("/categories", summary="Дерево категорий")
+def list_categories(repo: Repo) -> list[StoredCategory]:
+    """Категории с подкатегориями; при первом входе — стартовое дерево."""
+    return repo.categories()
+
+
+@router.post("/categories", status_code=status.HTTP_201_CREATED, summary="Добавить категорию")
+def create_category(repo: Repo, category: CategoryIn) -> StoredCategory:
+    """Категория или подкатегория (уровней два); цель — только у верхнего уровня."""
+    return service.create_category(repo, category.name, category.parent_id, category.target_share)
+
+
+@router.patch("/categories/{category_id}", summary="Переименовать, задать цель")
+def update_category(repo: Repo, category_id: str, patch: CategoryPatch) -> StoredCategory:
+    """Меняет только переданные поля; системные можно переименовать."""
+    return service.update_category(repo, category_id, patch.model_dump(exclude_unset=True))
+
+
+@router.delete(
+    "/categories/{category_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Удалить категорию",
+)
+def delete_category(repo: Repo, category_id: str) -> Response:
+    """Подкатегория → операции родителю; категория → в «Неопределённые»; системная — 422."""
+    service.delete_category(repo, category_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------- свои счета ----------
+
+
+class AccountIn(BaseModel):
+    """Свой счёт (последние 4 цифры) или номер телефона; кредитный — с кредитом из «Кредитов»."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    bank: Annotated[str, Field(min_length=1, examples=["alfa"])]
+    name: Name
+    kind: Literal["own", "credit"]
+    number_tail: Annotated[str | None, Field(pattern=r"^\d{4}$")] = None
+    phone: Annotated[str | None, Field(pattern=r"^\+7\d{10}$", examples=["+79000000000"])] = None
+    loan_id: str | None = None
+
+    @model_validator(mode="after")
+    def _consistent(self) -> Self:
+        if self.number_tail is None and self.phone is None:
+            raise ValueError("Нужен номер счёта (4 цифры) или телефон")
+        if (self.kind == "credit") != (self.loan_id is not None):
+            raise ValueError("loan_id обязателен у счёта кредита и запрещён у своего")
+        return self
+
+
+@router.get("/accounts", summary="Свои счета и номера")
+def list_accounts(repo: Repo) -> list[StoredAccount]:
+    """Переводы на них — себе (нейтрально) или в кредит (расход «Кредит»)."""
+    return repo.accounts()
+
+
+@router.post("/accounts", status_code=status.HTTP_201_CREATED, summary="Добавить свой счёт")
+def create_account(repo: Repo, account: AccountIn) -> StoredAccount:
+    """Действует на следующие загрузки; уже загруженные операции не пересчитываются."""
+    return service.create_account(repo, NewAccount(**account.model_dump()))
+
+
+@router.delete(
+    "/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Удалить свой счёт"
+)
+def delete_account(repo: Repo, account_id: str) -> Response:
+    """Удаляет счёт; уже загруженные операции не трогает."""
+    service.delete_account(repo, account_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
