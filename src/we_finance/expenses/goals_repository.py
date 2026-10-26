@@ -20,7 +20,7 @@ class Goals(Postgres):
         with self._cursor() as cur:
             cur.execute(
                 "SELECT id, name, target_amount, deadline, monthly_amount, initial_amount,"
-                " start_date FROM expense_goals WHERE user_id = %s ORDER BY created_at",
+                " start_date, loan_id FROM expense_goals WHERE user_id = %s ORDER BY created_at",
                 (self._user_id,),
             )
             return [Goal(*row) for row in cur.fetchall()]
@@ -35,13 +35,13 @@ class Goals(Postgres):
             with self._cursor() as cur:
                 cur.execute(
                     "INSERT INTO expense_goals (id, user_id, name, target_amount, deadline,"
-                    " monthly_amount, initial_amount, start_date)"
-                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                    " monthly_amount, initial_amount, start_date, loan_id)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
                     " ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name,"
                     " target_amount = EXCLUDED.target_amount, deadline = EXCLUDED.deadline,"
                     " monthly_amount = EXCLUDED.monthly_amount,"
                     " initial_amount = EXCLUDED.initial_amount,"
-                    " start_date = EXCLUDED.start_date",
+                    " start_date = EXCLUDED.start_date, loan_id = EXCLUDED.loan_id",
                     (
                         goal.id,
                         self._user_id,
@@ -51,6 +51,7 @@ class Goals(Postgres):
                         goal.monthly_amount,
                         goal.initial_amount,
                         goal.start_date,
+                        goal.loan_id,
                     ),
                 )
         except psycopg2.IntegrityError as exc:

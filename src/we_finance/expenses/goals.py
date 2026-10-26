@@ -18,7 +18,7 @@ _TO = re.compile(r"на сч[её]т (\d+)")
 
 
 @dataclass(frozen=True)
-class Goal:
+class Goal:  # pylint: disable=too-many-instance-attributes  # поля цели = хранимое
     """Цель: сумма, срок или фиксированный взнос, сколько было отложено до учёта."""
 
     id: str
@@ -28,6 +28,7 @@ class Goal:
     monthly_amount: Decimal | None
     initial_amount: Decimal = ZERO
     start_date: dt.date | None = None  # с какого числа копить; до этого месяца план 0
+    loan_id: str | None = None  # цель «закрыть кредит»: взносы — ЧДП по нему
 
 
 @dataclass(frozen=True)

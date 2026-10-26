@@ -1,6 +1,6 @@
 """Сценарии «Расходов» поверх ядра и хранилища. Про HTTP не знает."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import BinaryIO
@@ -15,6 +15,7 @@ from we_finance.expenses.classify import OperationType, operation_type
 from we_finance.expenses.errors import ExpenseError, ExpenseNotFoundError
 from we_finance.expenses.goals import Goal
 from we_finance.expenses.income_check import ExpectedPayment, IncomeCheck, check_income
+from we_finance.expenses.loan_goals import LoanGoals
 from we_finance.expenses.report import MonthPlan, MonthReport, build_month
 from we_finance.expenses.repository import (
     ClassifiedOperation,
@@ -315,7 +316,7 @@ def month_report(
     start, end = month_range(month)
     closed = end <= today
     plan = MonthPlan() if closed else month_plan(repo, salary_repo, loan_repo, month)
-    states = goal_states(repo, start)
+    states = goal_states(repo, start, LoanGoals(loan_repo, salary_repo, today))
     plan = MonthPlan(plan.income, plan.credit, plan.mandatory, sum((s.plan for s in states), ZERO))
     manual = sum((c.amount for c in repo.manual_contributions() if start <= c.day < end), ZERO)
     flows = repo.month_flows(start, end)
@@ -415,15 +416,28 @@ class GoalView:  # pylint: disable=too-many-instance-attributes  # поля = к
     account_tails: list[str]
     start_date: date | None = None
     paydays: list[Payday] = field(default_factory=list)
+    loan_id: str | None = None
+    closes_on: date | None = None  # цель «закрыть кредит»: когда закроется при таких ЧДП
+    interest_saved: Decimal | None = None  # сколько процентов не уйдёт банку
+    note: str | None = None
 
 
-def goal_states(repo: PostgresExpenseRepository, month_start: date) -> list[GoalState]:
-    """Все цели: отложено (взносы из выписки и вручную) и план на месяц month_start."""
+def goal_states(
+    repo: PostgresExpenseRepository, month_start: date, loans: LoanGoals
+) -> list[GoalState]:
+    """Все цели: отложено (взносы из выписки и вручную) и план на месяц month_start.
+
+    Цель «закрыть кредит»: отложено — на сколько уменьшился долг, план — ЧДП месяца.
+    """
     contributions = repo.manual_contributions() + goal_rules.from_statement(
         repo.savings_operations(), repo.savings_accounts()
     )
     result = []
     for goal in repo.goals():
+        if goal.loan_id:
+            loan = loans.state(goal, month_start)
+            result.append(GoalState(goal, loan.saved, loan.saved_before, loan.plan))
+            continue
         before = goal_rules.saved(goal, contributions, month_start)
         result.append(
             GoalState(
@@ -445,37 +459,60 @@ def goals_view(
 ) -> list[GoalView]:
     """Цели на месяц: не хватает на все планы — каждой пропорционально (решение заказчика)."""
     start, _ = month_range(month)
-    states = goal_states(repo, start)
+    loans = LoanGoals(loan_repo, salary_repo, today)
+    states = goal_states(repo, start, loans)
     report = month_report(repo, salary_repo, loan_repo, month, today)
     total = sum((s.plan for s in states), ZERO)
     shortage = max(-report.forecast.unallocated, ZERO)  # границы трат не влезают в остаток
     real = goal_rules.allocate({s.goal.id: s.plan for s in states}, total - shortage)
-    paydays = _salary_paydays(salary_repo, start)
     tails: dict[str, list[str]] = {}
     for tail, goal_id in repo.savings_accounts().items():
         tails.setdefault(goal_id, []).append(tail)
     return [
-        GoalView(
-            id=s.goal.id,
-            name=s.goal.name,
-            target_amount=s.goal.target_amount,
-            deadline=s.goal.deadline,
-            monthly_amount=s.goal.monthly_amount,
-            initial_amount=s.goal.initial_amount,
-            saved=s.saved,
-            saved_before_month=s.saved_before,
-            plan=s.plan,
-            contribution=real[s.goal.id],
-            eta=goal_rules.eta(s.goal, s.saved_before, real[s.goal.id], start),
-            account_tails=sorted(tails.get(s.goal.id, [])),
-            start_date=s.goal.start_date,
-            paydays=[
-                Payday(day, kind, amount)
-                for day, kind, amount in goal_rules.by_paydays(real[s.goal.id], paydays)
-            ],
-        )
+        _goal_view(s, real[s.goal.id], start, _salary_paydays(salary_repo, start), tails, loans)
         for s in states
     ]
+
+
+def _goal_view(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    s: GoalState,
+    real: Decimal,
+    start: date,
+    paydays: list[tuple[date, str, Decimal]],
+    tails: dict[str, list[str]],
+    loans: LoanGoals,
+) -> GoalView:
+    """Карточка цели; у цели «закрыть кредит» — ЧДП по дням, дата закрытия, экономия."""
+    view = GoalView(
+        id=s.goal.id,
+        name=s.goal.name,
+        target_amount=s.goal.target_amount,
+        deadline=s.goal.deadline,
+        monthly_amount=s.goal.monthly_amount,
+        initial_amount=s.goal.initial_amount,
+        saved=s.saved,
+        saved_before_month=s.saved_before,
+        plan=s.plan,
+        contribution=real,
+        eta=goal_rules.eta(s.goal, s.saved_before, real, start),
+        account_tails=sorted(tails.get(s.goal.id, [])),
+        start_date=s.goal.start_date,
+        paydays=[
+            Payday(day, kind, amount) for day, kind, amount in goal_rules.by_paydays(real, paydays)
+        ],
+    )
+    if not s.goal.loan_id:
+        return view
+    loan = loans.outcome(s.goal, start, real)
+    return replace(
+        view,
+        eta=f"{loan.closes_on:%Y-%m}" if loan.closes_on else None,
+        paydays=[Payday(day, kind, amount) for day, kind, amount in loan.paydays],
+        loan_id=s.goal.loan_id,
+        closes_on=loan.closes_on,
+        interest_saved=loan.interest_saved,
+        note=loan.note,
+    )
 
 
 def _salary_paydays(
@@ -494,10 +531,50 @@ def _salary_paydays(
     )
 
 
-def save_goal(repo: PostgresExpenseRepository, goal: Goal) -> Goal:
-    """Новая цель или правка: нужен срок или взнос в месяц."""
+@dataclass(frozen=True)
+class LoanGoalPreview:
+    """Цель «закрыть кредит» до сохранения: ЧДП месяца по дням, дата закрытия, экономия."""
+
+    debt: Decimal  # остаток долга сегодня
+    plan: Decimal
+    paydays: list[Payday]
+    closes_on: date | None
+    interest_saved: Decimal
+    note: str | None
+
+
+def preview_loan_goal(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    salary_repo: SalaryRepository,
+    loan_repo: LoanRepository,
+    goal: Goal,
+    month: str,
+    today: date,
+) -> LoanGoalPreview:
+    """Расчёт цели по кредиту на месяц, как если бы весь план влез в бюджет."""
+    start, _ = month_range(month)
+    loans = LoanGoals(loan_repo, salary_repo, today)
+    state = loans.state(goal, start)
+    outcome = loans.outcome(goal, start, state.plan)
+    return LoanGoalPreview(
+        goal.target_amount - state.saved,
+        state.plan,
+        [Payday(day, kind, amount) for day, kind, amount in outcome.paydays],
+        outcome.closes_on,
+        outcome.interest_saved,
+        outcome.note,
+    )
+
+
+def save_goal(
+    repo: PostgresExpenseRepository, goal: Goal, loan_repo: LoanRepository | None = None
+) -> Goal:
+    """Новая цель или правка: нужен срок или взнос в месяц; кредит — только свой."""
     if goal.deadline is None and goal.monthly_amount is None:
         raise ExpenseError("У цели нужен срок или взнос в месяц")
+    if goal.loan_id is not None:
+        mine = {s.loan.id for s in loan_repo.list_loans()} if loan_repo else set()
+        if goal.loan_id not in mine:
+            raise ExpenseNotFoundError(f"Кредит {goal.loan_id} не найден")
     repo.save_goal(goal)
     return repo.goal(goal.id)
 

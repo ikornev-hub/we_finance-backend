@@ -277,6 +277,7 @@ class GoalIn(BaseModel):
     monthly_amount: Annotated[Decimal | None, Field(gt=0, decimal_places=2)] = None
     initial_amount: Annotated[Decimal, Field(ge=0, decimal_places=2)] = Decimal("0")
     start_date: date | None = None  # с какого числа начать копить; нет — сразу
+    loan_id: str | None = None  # цель «закрыть кредит»: сумма — остаток долга при создании
 
 
 class ContributionIn(BaseModel):
@@ -301,16 +302,42 @@ def list_goals(
 
 
 @router.post("/goals", status_code=status.HTTP_201_CREATED, summary="Новая цель (Р5)")
-def create_goal(repo: Repo, goal: GoalIn) -> Goal:
+def create_goal(
+    repo: Repo, loan_repo: Annotated[LoanRepository, Depends(get_repository)], goal: GoalIn
+) -> Goal:
     """Нужен срок или взнос в месяц."""
-    return service.save_goal(repo, Goal(uuid4().hex, **goal.model_dump()))
+    return service.save_goal(repo, Goal(uuid4().hex, **goal.model_dump()), loan_repo)
+
+
+@router.post("/goals/preview", summary="Цель «закрыть кредит»: расчёт до сохранения (Р5)")
+def preview_goal(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    salary_repo: Annotated[SalaryRepository, Depends(get_salary_repository)],
+    loan_repo: Annotated[LoanRepository, Depends(get_repository)],
+    today: Annotated[date, Depends(get_today)],
+    goal: GoalIn,
+    month: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}$")] = None,
+) -> service.LoanGoalPreview:
+    """ЧДП по дням выплат месяца, дата закрытия и экономия процентов; нужен loan_id."""
+    if goal.loan_id is None:
+        raise service.ExpenseError("Предпросмотр — только для цели «закрыть кредит»")
+    if goal.loan_id not in {s.loan.id for s in loan_repo.list_loans()}:
+        raise service.ExpenseNotFoundError(f"Кредит {goal.loan_id} не найден")
+    month = month or f"{today.year}-{today.month:02}"
+    return service.preview_loan_goal(
+        salary_repo, loan_repo, Goal("preview", **goal.model_dump()), month, today
+    )
 
 
 @router.put("/goals/{goal_id}", summary="Изменить цель (Р5)")
-def update_goal(repo: Repo, goal_id: str, goal: GoalIn) -> Goal:
+def update_goal(
+    repo: Repo,
+    loan_repo: Annotated[LoanRepository, Depends(get_repository)],
+    goal_id: str,
+    goal: GoalIn,
+) -> Goal:
     """Все поля цели целиком."""
     service.get_goal(repo, goal_id)
-    return service.save_goal(repo, Goal(goal_id, **goal.model_dump()))
+    return service.save_goal(repo, Goal(goal_id, **goal.model_dump()), loan_repo)
 
 
 @router.delete("/goals/{goal_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Удалить цель")
