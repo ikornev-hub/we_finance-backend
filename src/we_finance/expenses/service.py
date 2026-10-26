@@ -92,6 +92,15 @@ def list_operations(
     return repo.operations(start, end, category_id, uncategorized)
 
 
+def change_categories(
+    repo: PostgresExpenseRepository, operation_ids: list[str], category_id: str
+) -> int:
+    """Выбор списком: одна категория нескольким операциям сразу, без правил."""
+    if not repo.has_category(category_id):
+        raise ExpenseError(f"Категории {category_id} нет")
+    return repo.set_categories(list(dict.fromkeys(operation_ids)), category_id)
+
+
 def change_category(
     repo: PostgresExpenseRepository, operation_id: str, category_id: str, remember: bool
 ) -> CategoryChange:

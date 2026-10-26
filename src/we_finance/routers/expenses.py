@@ -71,6 +71,19 @@ def preview_rule(repo: Repo, operation_id: str) -> RulePreview:
     return service.preview_rule(repo, operation_id)
 
 
+class CategoriesChangeIn(BaseModel):
+    """Выбор списком: какие операции и в какую категорию."""
+
+    operation_ids: Annotated[list[str], Field(min_length=1, max_length=500)]
+    category_id: str
+
+
+@router.post("/operations/category", summary="Одна категория нескольким операциям (Р2)")
+def change_categories(repo: Repo, change: CategoriesChangeIn) -> dict[str, int]:
+    """Чужие и несуществующие операции пропускаются; в ответе — сколько обновлено."""
+    return {"updated": service.change_categories(repo, change.operation_ids, change.category_id)}
+
+
 @router.patch("/operations/{operation_id}", summary="Сменить категорию операции (Р2)")
 def change_category(repo: Repo, operation_id: str, change: CategoryChangeIn) -> CategoryChange:
     """Категория от пользователя; remember — правило, такие же неразобранные разложатся сразу."""
