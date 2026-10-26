@@ -9,6 +9,7 @@ from uuid import uuid4
 from we_finance.credit.models import (
     HistoryEntry,
     Loan,
+    LoanStatus,
     PaymentDayChange,
     Prepayment,
     RatePeriod,
@@ -156,7 +157,13 @@ def loan_detail(repo: LoanRepository, loan_id: str, as_of: date) -> LoanDetailOu
     """Кредит целиком на дату (С3–С5)."""
     stored = _get(repo, loan_id)
     calculation = build_calculation(stored.loan, stored.prepayments, as_of)
-    return LoanDetailOut(id=stored.loan.id, name=stored.loan.name, **dict(calculation))
+    return LoanDetailOut(
+        id=stored.loan.id,
+        name=stored.loan.name,
+        status=stored.status,
+        can_complete=can_complete(stored, as_of),
+        **dict(calculation),
+    )
 
 
 def create_loan(repo: LoanRepository, loan_in: LoanCreateIn, as_of: date) -> LoanDetailOut:
@@ -167,10 +174,14 @@ def create_loan(repo: LoanRepository, loan_in: LoanCreateIn, as_of: date) -> Loa
     return loan_detail(repo, loan.id, as_of)
 
 
-def list_loans(repo: LoanRepository, as_of: date) -> list[LoanSummaryOut]:
-    """Список кредитов с остатком на дату (С2)."""
+def list_loans(
+    repo: LoanRepository, as_of: date, status: LoanStatus = LoanStatus.ACTIVE
+) -> list[LoanSummaryOut]:
+    """Список кредитов в одном состоянии с остатком на дату (С2, С8)."""
     result = []
     for stored in repo.list_loans():
+        if stored.status != status:
+            continue
         rows, applied = calculate(stored.loan, stored.prepayments)
         state = state_from(stored.loan, rows, applied, as_of)
         result.append(
@@ -180,6 +191,8 @@ def list_loans(repo: LoanRepository, as_of: date) -> list[LoanSummaryOut]:
                 principal=stored.loan.principal,
                 balance=state.balance,
                 close_date=state.close_date,
+                status=stored.status,
+                can_complete=stored.status == LoanStatus.ACTIVE and state.balance == 0,
             )
         )
     return result
@@ -207,7 +220,55 @@ def add_prepayment(
 ) -> LoanDetailOut:
     """Внести ЧДП (С7): проверить, сохранить, вернуть кредит целиком."""
     stored = _get(repo, loan_id)
+    if stored.status == LoanStatus.DELETED:
+        raise CreditError("Кредит удалён: ЧДП не вносятся")
+
     new = to_prepayment(prepayment_in)
     check_prepayments(stored.loan, (*stored.prepayments, new))
     repo.add_prepayment(loan_id, new)
+    return loan_detail(repo, loan_id, as_of)
+
+
+# ---------- С8: архив ----------
+
+
+def _balance(stored: StoredLoan, as_of: date) -> Decimal:
+    """Остаток долга на дату."""
+    rows, applied = calculate(stored.loan, stored.prepayments)
+    return state_from(stored.loan, rows, applied, as_of).balance
+
+
+def can_complete(stored: StoredLoan, as_of: date) -> bool:
+    """Подсказать «кредит выплачен»: активный и остаток 0."""
+    return stored.status == LoanStatus.ACTIVE and _balance(stored, as_of) == 0
+
+
+def delete_loan(repo: LoanRepository, loan_id: str, as_of: date) -> LoanDetailOut:
+    """Удалить мягко: в архив «Удалённые», в расчётах больше не участвует."""
+    stored = _get(repo, loan_id)
+    if stored.status == LoanStatus.DELETED:
+        raise CreditError("Кредит уже удалён")
+    repo.add_status(loan_id, LoanStatus.DELETED)
+    return loan_detail(repo, loan_id, as_of)
+
+
+def complete_loan(repo: LoanRepository, loan_id: str, as_of: date) -> LoanDetailOut:
+    """В архив «Завершённые» — только активный и только при остатке 0."""
+    stored = _get(repo, loan_id)
+    if not can_complete(stored, as_of):
+        raise CreditError("Завершить можно только активный кредит с остатком 0")
+    repo.add_status(loan_id, LoanStatus.COMPLETED)
+    return loan_detail(repo, loan_id, as_of)
+
+
+def restore_loan(repo: LoanRepository, loan_id: str, as_of: date) -> LoanDetailOut:
+    """Вернуть удалённый в то состояние, из которого удалили."""
+    stored = _get(repo, loan_id)
+    if stored.status != LoanStatus.DELETED:
+        raise CreditError("Восстановить можно только удалённый кредит")
+
+    previous = (
+        stored.status_history[-2].status if len(stored.status_history) > 1 else LoanStatus.ACTIVE
+    )
+    repo.add_status(loan_id, previous)
     return loan_detail(repo, loan_id, as_of)

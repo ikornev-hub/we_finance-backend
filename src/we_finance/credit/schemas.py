@@ -11,7 +11,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from we_finance.credit.models import DayCount, EntryKind, PrepaymentMode
+from we_finance.credit.models import DayCount, EntryKind, LoanStatus, PrepaymentMode
 
 # Примеры для Swagger (кнопка Try it out): учебный кредит из требований, не реальные данные.
 EXAMPLE_LOAN = {
@@ -210,6 +210,8 @@ class LoanSummaryOut(BaseModel):
     principal: Decimal
     balance: Decimal
     close_date: date
+    status: LoanStatus
+    can_complete: bool
 
 
 class LoanDetailOut(CalculationOut):
@@ -217,6 +219,8 @@ class LoanDetailOut(CalculationOut):
 
     id: str
     name: str
+    status: LoanStatus
+    can_complete: bool
 
 
 class PreviewOut(BaseModel):

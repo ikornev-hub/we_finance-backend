@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 
@@ -74,12 +74,34 @@ class Prepayment:
     mode: PrepaymentMode
 
 
+class LoanStatus(StrEnum):
+    """Состояние кредита (сценарий С8)."""
+
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    DELETED = "deleted"
+
+
+@dataclass(frozen=True)
+class StatusChange:
+    """Переход в состояние: какое и когда."""
+
+    status: LoanStatus
+    changed_at: datetime
+
+
 @dataclass(frozen=True)
 class StoredLoan:
-    """Что хранится: кредит и его ЧДП (события). Всё остальное вычисляется."""
+    """Что хранится: кредит, его ЧДП и переходы состояния (события). Всё остальное вычисляется."""
 
     loan: Loan
     prepayments: tuple[Prepayment, ...] = ()
+    status_history: tuple[StatusChange, ...] = ()
+
+    @property
+    def status(self) -> LoanStatus:
+        """Текущее состояние — последний переход; переходов не было — активный."""
+        return self.status_history[-1].status if self.status_history else LoanStatus.ACTIVE
 
 
 class EntryKind(StrEnum):
