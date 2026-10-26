@@ -8,9 +8,12 @@ from typing import BinaryIO
 from we_finance.credit.models import LoanStatus
 from we_finance.credit.repository import LoanRepository
 from we_finance.credit.schedule import calculate
+from we_finance.expenses import analysis as analysis_rules
+from we_finance.expenses import goals as goal_rules
 from we_finance.expenses.categories import category_for
 from we_finance.expenses.classify import operation_type
 from we_finance.expenses.errors import ExpenseError, ExpenseNotFoundError
+from we_finance.expenses.goals import Goal
 from we_finance.expenses.income_check import ExpectedPayment, IncomeCheck, check_income
 from we_finance.expenses.report import MonthPlan, MonthReport, build_month
 from we_finance.expenses.repository import (
@@ -263,8 +266,13 @@ def month_report(
     start, end = month_range(month)
     closed = end <= today
     plan = MonthPlan() if closed else month_plan(repo, salary_repo, loan_repo, month)
+    states = goal_states(repo, start)
+    plan = MonthPlan(plan.income, plan.credit, plan.mandatory, sum((s.plan for s in states), ZERO))
+    manual = sum((c.amount for c in repo.manual_contributions() if start <= c.day < end), ZERO)
     flows = repo.month_flows(start, end)
-    return build_month(month, repo.limited_groups(), repo.limited_tree(), flows, plan, closed)
+    return build_month(
+        month, repo.limited_groups(), repo.limited_tree(), flows, plan, closed, manual
+    )
 
 
 # ---------- сверка доходов ----------
@@ -314,3 +322,166 @@ def update_group(
             raise ExpenseError("У «Обязательных» границы нет: они вычитаются из дохода")
         repo.set_group_limit(group_id, share, amount)  # type: ignore[arg-type]
     return repo.group(group_id)
+
+
+# ---------- цели накоплений ----------
+
+ZERO = Decimal("0")
+
+
+@dataclass(frozen=True)
+class GoalState:
+    """Цель на месяц: сколько отложено всего и к началу месяца, план месяца."""
+
+    goal: Goal
+    saved: Decimal
+    saved_before: Decimal
+    plan: Decimal
+
+
+@dataclass(frozen=True)
+class GoalView:  # pylint: disable=too-many-instance-attributes  # поля = контракт API
+    """Цель для экрана: прогресс, план, реальный взнос (с пропорцией), месяц достижения."""
+
+    id: str
+    name: str
+    target_amount: Decimal
+    deadline: date | None
+    monthly_amount: Decimal | None
+    initial_amount: Decimal
+    saved: Decimal
+    saved_before_month: Decimal
+    plan: Decimal
+    contribution: Decimal
+    eta: str | None
+    account_tails: list[str]
+
+
+def goal_states(repo: PostgresExpenseRepository, month_start: date) -> list[GoalState]:
+    """Все цели: отложено (взносы из выписки и вручную) и план на месяц month_start."""
+    contributions = repo.manual_contributions() + goal_rules.from_statement(
+        repo.savings_operations(), repo.savings_accounts()
+    )
+    result = []
+    for goal in repo.goals():
+        before = goal_rules.saved(goal, contributions, month_start)
+        result.append(
+            GoalState(
+                goal,
+                goal_rules.saved(goal, contributions),
+                before,
+                goal_rules.plan(goal, before, month_start),
+            )
+        )
+    return result
+
+
+def goals_view(
+    repo: PostgresExpenseRepository,
+    salary_repo: SalaryRepository,
+    loan_repo: LoanRepository,
+    month: str,
+    today: date,
+) -> list[GoalView]:
+    """Цели на месяц: не хватает на все планы — каждой пропорционально (решение заказчика)."""
+    start, _ = month_range(month)
+    states = goal_states(repo, start)
+    report = month_report(repo, salary_repo, loan_repo, month, today)
+    total = sum((s.plan for s in states), ZERO)
+    shortage = max(-report.forecast.unallocated, ZERO)  # границы трат не влезают в остаток
+    real = goal_rules.allocate({s.goal.id: s.plan for s in states}, total - shortage)
+    tails: dict[str, list[str]] = {}
+    for tail, goal_id in repo.savings_accounts().items():
+        tails.setdefault(goal_id, []).append(tail)
+    return [
+        GoalView(
+            id=s.goal.id,
+            name=s.goal.name,
+            target_amount=s.goal.target_amount,
+            deadline=s.goal.deadline,
+            monthly_amount=s.goal.monthly_amount,
+            initial_amount=s.goal.initial_amount,
+            saved=s.saved,
+            saved_before_month=s.saved_before,
+            plan=s.plan,
+            contribution=real[s.goal.id],
+            eta=goal_rules.eta(s.goal, s.saved_before, real[s.goal.id], start),
+            account_tails=sorted(tails.get(s.goal.id, [])),
+        )
+        for s in states
+    ]
+
+
+def save_goal(repo: PostgresExpenseRepository, goal: Goal) -> Goal:
+    """Новая цель или правка: нужен срок или взнос в месяц."""
+    if goal.deadline is None and goal.monthly_amount is None:
+        raise ExpenseError("У цели нужен срок или взнос в месяц")
+    repo.save_goal(goal)
+    return repo.goal(goal.id)
+
+
+def get_goal(repo: PostgresExpenseRepository, goal_id: str) -> Goal:
+    """Цель пользователя; нет — 404."""
+    goal = repo.goal(goal_id)
+    if goal is None:
+        raise ExpenseNotFoundError(f"Цель {goal_id} не найдена")
+    return goal
+
+
+# ---------- анализ ----------
+
+
+def _months(first: str, last: str) -> list[str]:
+    """«2026-05», «2026-10» → все месяцы между ними включительно (не больше 24)."""
+    start, _ = month_range(first)
+    end, _ = month_range(last)
+    if end < start:
+        raise ExpenseError("Конец периода раньше начала")
+    result = []
+    index = start.year * 12 + start.month - 1
+    while index <= end.year * 12 + end.month - 1:
+        result.append(f"{index // 12}-{index % 12 + 1:02}")
+        index += 1
+    if len(result) > 24:
+        raise ExpenseError("Период не больше 24 месяцев")
+    return result
+
+
+def _fact_reports(
+    repo: PostgresExpenseRepository, months: list[str], today: date
+) -> list[tuple[MonthReport, bool]]:
+    """Отчёты месяцев только по факту (без плана) и признак «месяц закончился»."""
+    groups, tree = repo.limited_groups(), repo.limited_tree()
+    manual = repo.manual_contributions()
+    facts = []
+    for month in months:
+        start, end = month_range(month)
+        month_manual = sum((c.amount for c in manual if start <= c.day < end), ZERO)
+        report = build_month(
+            month, groups, tree, repo.month_flows(start, end), MonthPlan(), True, month_manual
+        )
+        facts.append((report, end <= today))
+    return facts
+
+
+def analysis(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    repo: PostgresExpenseRepository,
+    salary_repo: SalaryRepository,
+    loan_repo: LoanRepository,
+    first: str,
+    last: str,
+    today: date,
+) -> analysis_rules.Analysis:
+    """Динамика по фактам месяцев; статистика — по полным месяцам с выпиской; темп — текущий."""
+    facts = _fact_reports(repo, _months(first, last), today)
+    full = [report for report, closed in facts if closed and report.has_statement]
+    current = f"{today.year}-{today.month:02}"
+    pace = None
+    if current in {report.month for report, _ in facts}:
+        live = month_report(repo, salary_repo, loan_repo, current, today)
+        pace = analysis_rules.pace(live, today)
+    return analysis_rules.Analysis(
+        months=[analysis_rules.to_month(report) for report, _ in facts],
+        stats=analysis_rules.stats(full),
+        pace=pace,
+    )

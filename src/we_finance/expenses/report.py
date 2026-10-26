@@ -56,6 +56,7 @@ class MonthPlan:
     income: Decimal = ZERO
     credit: Decimal = ZERO
     mandatory: dict[str, Decimal] = field(default_factory=dict)  # категория → по правилам
+    savings: Decimal = ZERO  # отложить на цели по плану (Σ планов целей)
 
 
 @dataclass(frozen=True)
@@ -109,7 +110,8 @@ class MonthForecast:  # pylint: disable=too-many-instance-attributes  # поля
 
     income: Decimal
     mandatory: Decimal  # Σ обязательных: кредит, жильё, связь, близкие…
-    disposable: Decimal  # доход − обязательные
+    savings: Decimal  # отложить на цели: «сначала себе»
+    disposable: Decimal  # доход − обязательные − отложить
     spent: Decimal  # потрачено из располагаемого (всё, кроме обязательных)
     can_spend: Decimal  # располагаемый − потрачено
     limits_total: Decimal
@@ -123,8 +125,9 @@ class MonthReport:  # pylint: disable=too-many-instance-attributes  # поля =
     month: str
     income: Decimal
     expenses: Decimal
-    balance: Decimal
+    balance: Decimal  # доходы − расходы − отложено
     disposable: Decimal  # по факту выписки
+    saved: Decimal  # отложено по факту: на накопительные счета и вручную
     uncategorized_count: int
     has_statement: bool
     closed: bool  # месяц закончился: прогноз = факт, план не подмешивается
@@ -283,22 +286,57 @@ def _month_groups(
 
 
 def _month_forecast(
-    planned: tuple[Decimal, Decimal], categories: list[MonthCategory], groups: list[MonthGroup]
+    planned: tuple[Decimal, Decimal, Decimal],
+    categories: list[MonthCategory],
+    groups: list[MonthGroup],
 ) -> MonthForecast:
-    """Блок прогноза: (доход, обязательные) → располагаемый, потрачено, распределено."""
-    income, mandatory = planned
-    base = _money(income - mandatory)
+    """Блок прогноза: (доход, обязательные, отложить) → располагаемый, потрачено, распределено."""
+    income, mandatory, savings = planned
+    base = _money(income - mandatory - savings)
     spent = sum((c.amount for c in categories if c.group_code != MANDATORY), ZERO)
     limits_total = sum((_group_limit(g) for g in groups), ZERO)
     return MonthForecast(
         income=_money(income),
         mandatory=_money(mandatory),
+        savings=_money(savings),
         disposable=base,
         spent=_money(spent),
         can_spend=_money(base - spent),
         limits_total=_money(limits_total),
         unallocated=_money(base - limits_total),
     )
+
+
+def _saved(tree: list[LimitedCategory], flows: dict[str, Flow], manual: Decimal) -> Decimal:
+    """Отложено по факту: ушло на накопительные счета минус снятое с них, плюс вручную."""
+    category = next((c for c in tree if c.system_code == "savings"), None)
+    if category is None:
+        return manual
+    return _total(flows, category, "outflow") - _total(flows, category, "inflow") + manual
+
+
+def _planned(
+    spending: list[LimitedCategory],
+    flows: dict[str, Flow],
+    plan: MonthPlan,
+    income: Decimal,
+    saved: Decimal,
+) -> tuple[Decimal, Decimal, Decimal]:
+    """(доход, обязательные, отложить) прогноза: по каждому — больше из плана и факта.
+
+    «Сначала себе»: отложить — план целей; отложил больше плана — считаем факт.
+    """
+    mandatory = [c for c in spending if _group_code(c) == MANDATORY]
+    return (
+        max(plan.income, income),
+        _forecast_mandatory(mandatory, flows, plan),
+        max(plan.savings, saved),
+    )
+
+
+def _has_statement(flows: dict[str, Flow]) -> bool:
+    """За месяц есть хоть одна операция."""
+    return any(flow.count for flow in flows.values())
 
 
 def build_month(  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -308,6 +346,7 @@ def build_month(  # pylint: disable=too-many-arguments,too-many-positional-argum
     flows: dict[str, Flow],
     plan: MonthPlan,
     closed: bool = False,
+    manual_saved: Decimal = ZERO,
 ) -> MonthReport:
     """Отчёт месяца по группам, дереву, движению по категориям и плану.
 
@@ -316,28 +355,28 @@ def build_month(  # pylint: disable=too-many-arguments,too-many-positional-argum
     """
     plan = MonthPlan() if closed else plan
     income = _income(tree, flows)
-    spending = [c for c in tree if c.system_code != "income"]
-    mandatory = [c for c in spending if _group_code(c) == MANDATORY]
-    planned = (max(plan.income, income), _forecast_mandatory(mandatory, flows, plan))
-    base = _money(planned[0] - planned[1])
+    spending = [c for c in tree if c.system_code not in ("income", "savings")]
+    saved = _saved(tree, flows, manual_saved)
+    planned = _planned(spending, flows, plan, income, saved)
+    base = _money(planned[0] - planned[1] - planned[2])
     categories = [_category(c, flows, base) for c in spending]
     month_groups = _month_groups(groups, categories, base, planned[0])
     expenses = sum((c.amount for c in categories), ZERO)
-    has_statement = any(flow.count for flow in flows.values())
     return MonthReport(
         month=month,
         income=_money(income),
         expenses=_money(expenses),
-        balance=_money(income - expenses),
+        balance=_money(income - expenses - saved),
         disposable=_money(
             income - sum((c.amount for c in categories if c.group_code == MANDATORY), ZERO)
         ),
         uncategorized_count=sum(
             flows.get(c.id, Flow()).count for c in tree if c.system_code == "uncategorized"
         ),
-        has_statement=has_statement,
+        saved=_money(saved),
+        has_statement=_has_statement(flows),
         closed=closed,
-        warnings=_warnings(month, has_statement, base, month_groups),
+        warnings=_warnings(month, _has_statement(flows), base, month_groups),
         forecast=_month_forecast(planned, categories, month_groups),
         groups=month_groups,
         categories=sorted(categories, key=lambda c: (-c.amount, c.name)),

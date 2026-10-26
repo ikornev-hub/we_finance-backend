@@ -16,6 +16,8 @@ OWN_TRANSFER = "Переводы себе"
 HOUSING = "Жильё"
 # Снятие наличных — расход фактом снятия, на что потрачены, не разбираем (бизнес-требования).
 CASH = "Наличные"
+# Переводы на накопительный счёт цели — не трата, а «Отложено» (решение 2026-10-26).
+SAVINGS = "Накопления"
 
 # Стартовое дерево: категория → подкатегории. Каждому пользователю — копия, дальше он меняет её сам.
 DEFAULT_TREE: dict[str, list[str]] = {
@@ -40,6 +42,7 @@ DEFAULT_TREE: dict[str, list[str]] = {
     "Прочее": ["Доставка"],
     OWN_TRANSFER: [],
     CASH: [],
+    SAVINGS: [],
     CREDIT: [],
     INCOME: [],
     UNCATEGORIZED: [],
@@ -70,6 +73,7 @@ DEFAULT_GROUP: dict[str, str | None] = {
     "Прочее": "purchases",
     "Крупные покупки": "purchases",
     OWN_TRANSFER: None,
+    SAVINGS: None,
     UNCATEGORIZED: None,
     INCOME: None,
 }
@@ -172,10 +176,13 @@ def category_for(op: StatementOperation, kind: OperationType, rules: list[Rule])
     """
     if kind == OperationType.TRANSFER_OWN:
         return OWN_TRANSFER if op.amount < 0 else UNCATEGORIZED
-    if kind == OperationType.TRANSFER_CREDIT:
-        return CREDIT
-    if kind == OperationType.INCOME:
-        return INCOME
+    fixed = {
+        OperationType.TRANSFER_CREDIT: CREDIT,
+        OperationType.TRANSFER_SAVINGS: SAVINGS,
+        OperationType.INCOME: INCOME,
+    }
+    if kind in fixed:
+        return fixed[kind]
     for rule in rules:
         if _matches(rule, op):
             return _refine(rule.category, op)

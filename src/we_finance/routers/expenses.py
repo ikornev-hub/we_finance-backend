@@ -4,12 +4,14 @@ from datetime import date
 from decimal import Decimal
 from io import BytesIO
 from typing import Annotated, Literal, Self
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Path, Query, Response, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from we_finance.credit.repository import LoanRepository
 from we_finance.expenses import service
+from we_finance.expenses.goals import Goal
 from we_finance.expenses.income_check import IncomeCheck
 from we_finance.expenses.report import MonthReport
 from we_finance.expenses.repository import (
@@ -153,10 +155,11 @@ class AccountIn(BaseModel):
 
     bank: Annotated[str, Field(min_length=1, examples=["alfa"])]
     name: Name
-    kind: Literal["own", "credit"]
+    kind: Literal["own", "credit", "savings"]
     number_tail: Annotated[str | None, Field(pattern=r"^\d{4}$")] = None
     phone: Annotated[str | None, Field(pattern=r"^\+7\d{10}$", examples=["+79000000000"])] = None
     loan_id: str | None = None
+    goal_id: str | None = None  # у накопительного счёта — его цель
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:
@@ -164,6 +167,10 @@ class AccountIn(BaseModel):
             raise ValueError("Нужен номер счёта (4 цифры) или телефон")
         if (self.kind == "credit") != (self.loan_id is not None):
             raise ValueError("loan_id обязателен у счёта кредита и запрещён у своего")
+        if (self.kind == "savings") != (self.goal_id is not None):
+            raise ValueError("goal_id обязателен у накопительного счёта и запрещён у других")
+        if self.kind == "savings" and self.number_tail is None:
+            raise ValueError("У накопительного счёта нужны 4 последние цифры номера")
         return self
 
 
@@ -240,3 +247,91 @@ def list_groups(repo: Repo) -> list[StoredGroup]:
 def update_group(repo: Repo, group_id: str, patch: GroupPatch) -> StoredGroup:
     """Граница — доля располагаемого или сумма; у «Обязательных» границы нет."""
     return service.update_group(repo, group_id, patch.model_dump(exclude_unset=True))
+
+
+# ---------- цели накоплений ----------
+
+
+class GoalIn(BaseModel):
+    """Цель: сумма и срок или взнос в месяц; сколько уже отложено до учёта."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: Name
+    target_amount: Annotated[Decimal, Field(gt=0, decimal_places=2, examples=["1000000.00"])]
+    deadline: date | None = None
+    monthly_amount: Annotated[Decimal | None, Field(gt=0, decimal_places=2)] = None
+    initial_amount: Annotated[Decimal, Field(ge=0, decimal_places=2)] = Decimal("0")
+
+
+class ContributionIn(BaseModel):
+    """Ручной взнос: плюс — отложил, минус — снял."""
+
+    day: date
+    amount: Annotated[Decimal, Field(decimal_places=2)]
+    comment: Annotated[str | None, Field(max_length=200)] = None
+
+
+@router.get("/goals", summary="Цели накоплений на месяц (Р5)")
+def list_goals(
+    repo: Repo,
+    salary_repo: Annotated[SalaryRepository, Depends(get_salary_repository)],
+    loan_repo: Annotated[LoanRepository, Depends(get_repository)],
+    today: Annotated[date, Depends(get_today)],
+    month: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}$")] = None,
+) -> list[service.GoalView]:
+    """Отложено, план месяца, реальный взнос (не хватает — пропорционально), месяц достижения."""
+    month = month or f"{today.year}-{today.month:02}"
+    return service.goals_view(repo, salary_repo, loan_repo, month, today)
+
+
+@router.post("/goals", status_code=status.HTTP_201_CREATED, summary="Новая цель (Р5)")
+def create_goal(repo: Repo, goal: GoalIn) -> Goal:
+    """Нужен срок или взнос в месяц."""
+    return service.save_goal(repo, Goal(uuid4().hex, **goal.model_dump()))
+
+
+@router.put("/goals/{goal_id}", summary="Изменить цель (Р5)")
+def update_goal(repo: Repo, goal_id: str, goal: GoalIn) -> Goal:
+    """Все поля цели целиком."""
+    service.get_goal(repo, goal_id)
+    return service.save_goal(repo, Goal(goal_id, **goal.model_dump()))
+
+
+@router.delete("/goals/{goal_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Удалить цель")
+def delete_goal(repo: Repo, goal_id: str) -> Response:
+    """С ручными взносами и привязанными накопительными счетами."""
+    service.get_goal(repo, goal_id)
+    repo.delete_goal(goal_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/goals/{goal_id}/contributions", status_code=status.HTTP_201_CREATED, summary="Ручной взнос"
+)
+def add_contribution(repo: Repo, goal_id: str, contribution: ContributionIn) -> dict[str, str]:
+    """Наличные, другой банк: «отложил N». Минус — снял."""
+    service.get_goal(repo, goal_id)
+    if contribution.amount == 0:
+        raise service.ExpenseError("Взнос не может быть нулевым")
+    return {
+        "id": repo.add_contribution(
+            goal_id, contribution.day, contribution.amount, contribution.comment
+        )
+    }
+
+
+# ---------- анализ ----------
+
+
+@router.get("/analysis", summary="Анализ трат: динамика, медиана, темп (Р6)")
+def spending_analysis(  # pylint: disable=too-many-arguments,too-many-positional-arguments  # зависимости FastAPI
+    repo: Repo,
+    salary_repo: Annotated[SalaryRepository, Depends(get_salary_repository)],
+    loan_repo: Annotated[LoanRepository, Depends(get_repository)],
+    today: Annotated[date, Depends(get_today)],
+    first: Annotated[str, Query(alias="from", pattern=r"^\d{4}-\d{2}$")],
+    last: Annotated[str, Query(alias="to", pattern=r"^\d{4}-\d{2}$")],
+) -> service.analysis_rules.Analysis:
+    """Месяцы периода по факту; медиана и максимум — по полным месяцам; темп — текущего месяца."""
+    return service.analysis(repo, salary_repo, loan_repo, first, last, today)

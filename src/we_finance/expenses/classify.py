@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
+from we_finance.expenses.goals import savings_tail
 from we_finance.expenses.statement import StatementOperation
 
 
@@ -16,6 +17,7 @@ class OperationType(StrEnum):
     TRANSFER_CREDIT = "transfer_credit"  # на счёт кредита — расход «Кредит»
     TRANSFER_PERSON = "transfer_person"  # человеку
     TRANSFER_IN = "transfer_in"  # пришло от человека
+    TRANSFER_SAVINGS = "transfer_savings"  # на накопительный счёт или с него — взнос в цель
 
 
 @dataclass(frozen=True)
@@ -24,6 +26,7 @@ class Owner:
 
     phones: frozenset[str] = frozenset()
     credit_banks: frozenset[str] = frozenset()
+    savings_tails: frozenset[str] = frozenset()  # 4 последние цифры накопительных счетов
 
 
 _INCOME = ("ЗАРАБОТНАЯ ПЛАТА", "АВАНС ПО ЗАРАБОТНОЙ ПЛАТЕ", "ОТПУСКНЫЕ")
@@ -42,7 +45,9 @@ def _incoming_type(op: StatementOperation, owner: Owner) -> OperationType:
     """Пришли деньги: доход, от себя или от человека."""
     if op.description.startswith(_INCOME):
         return OperationType.INCOME
-    if _OWN in op.description or op.counterparty in owner.phones:
+    if _OWN in op.description:
+        return _own_type(op, owner, outgoing=False)
+    if op.counterparty in owner.phones:
         return OperationType.TRANSFER_OWN
     return OperationType.TRANSFER_IN
 
@@ -52,12 +57,26 @@ def _outgoing_type(op: StatementOperation, owner: Owner) -> OperationType:
     text = op.description
     if op.mcc or "Исходящий платеж QR" in text:
         return OperationType.CARD
-    if _OWN in text or "Перевод собственных средств" in text:
-        if any(bank in text for bank in owner.credit_banks):
-            return OperationType.TRANSFER_CREDIT
-        return OperationType.TRANSFER_OWN
+    if _OWN in text:
+        return _own_type(op, owner, outgoing=True)
+    if "Перевод собственных средств" in text:
+        return _other_bank_type(op, owner)
     if op.counterparty:
         if op.counterparty in owner.phones:
             return OperationType.TRANSFER_OWN
         return OperationType.TRANSFER_PERSON
     return OperationType.PAYMENT
+
+
+def _other_bank_type(op: StatementOperation, owner: Owner) -> OperationType:
+    """«Перевод собственных средств в банк …»: в банк кредита — в кредит, иначе — себе."""
+    if any(bank in op.description for bank in owner.credit_banks):
+        return OperationType.TRANSFER_CREDIT
+    return OperationType.TRANSFER_OWN
+
+
+def _own_type(op: StatementOperation, owner: Owner, outgoing: bool) -> OperationType:
+    """Между своими счетами в Альфе: накопительный счёт цели — взнос, иначе — себе."""
+    if savings_tail(op.description, outgoing) in owner.savings_tails:
+        return OperationType.TRANSFER_SAVINGS
+    return OperationType.TRANSFER_OWN
