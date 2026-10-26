@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from we_finance import __version__
 from we_finance.credit.service import CreditError, LoanNotFoundError
 from we_finance.db import check_db
+from we_finance.expenses.service import ExpenseError, ExpenseNotFoundError
 from we_finance.expenses.statement import StatementFormatError
 from we_finance.routers import auth, calculator, expenses, loans, salary
 from we_finance.salary.service import ProfileNotFoundError, SalaryError
@@ -22,6 +23,18 @@ app.include_router(expenses.router, prefix="/api/v1")
 def statement_format_handler(_request: Request, exc: StatementFormatError) -> JSONResponse:
     """Файл не похож на выписку этого банка → 422 с понятным текстом."""
     return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
+@app.exception_handler(ExpenseError)
+def expense_error_handler(_request: Request, exc: ExpenseError) -> JSONResponse:
+    """Ввод противоречит расходам пользователя → 422."""
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
+@app.exception_handler(ExpenseNotFoundError)
+def expense_not_found_handler(_request: Request, exc: ExpenseNotFoundError) -> JSONResponse:
+    """Нет такой операции, категории или счёта → 404."""
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
 
 
 @app.exception_handler(CreditError)

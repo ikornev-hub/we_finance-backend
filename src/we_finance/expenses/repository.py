@@ -1,7 +1,9 @@
 """Расходы в Postgres: категории, загрузки, операции, правила, свои счета."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import uuid4
 
@@ -52,12 +54,66 @@ class NewAccount:
     loan_id: str | None = None
 
 
+@dataclass(frozen=True)
+class StoredOperation:  # pylint: disable=too-many-instance-attributes  # поля = контракт API
+    """Операция из базы, как её видит пользователь: с путём категории."""
+
+    id: str
+    operated_at: date
+    amount: Decimal
+    description: str
+    merchant: str | None
+    counterparty: str | None
+    type: OperationType
+    category_id: str | None
+    category_path: str | None  # «Категория/Подкатегория»; None — нейтральная
+
+
+@dataclass(frozen=True)
+class StoredRule:
+    """Правило из базы: «этот получатель / мерчант → категория»."""
+
+    id: str
+    match_kind: str
+    pattern: str
+    category_id: str
+
+
+# Операция с путём категории; WHERE дописывает вызывающий метод.
+_OPERATIONS_SQL = (
+    "SELECT o.id, o.operated_at::date, o.amount, o.description, o.merchant, o.counterparty,"
+    " o.type, o.category_id,"
+    " CASE WHEN p.name IS NULL THEN c.name ELSE p.name || '/' || c.name END"
+    " FROM expense_operations o"
+    " LEFT JOIN expense_categories c ON c.id = o.category_id"
+    " LEFT JOIN expense_categories p ON p.id = c.parent_id"
+)
+
+
+def _operation(row: tuple) -> StoredOperation:
+    """Строка _OPERATIONS_SQL → операция."""
+    op_id, day, amount, *texts, kind, category_id, path = row
+    return StoredOperation(
+        op_id, day, amount.quantize(Decimal("0.01")), *texts, OperationType(kind), category_id, path
+    )
+
+
 class PostgresExpenseRepository:
     """Расходы одного пользователя."""
 
     def __init__(self, database_url: str, user_id: str) -> None:
         self._url = database_url
         self._user_id = user_id
+
+    @contextmanager
+    def _cursor(self) -> Iterator:
+        """Курсор в одной транзакции: вышли без ошибки — COMMIT, с ошибкой — ROLLBACK."""
+        conn = psycopg2.connect(self._url)
+        try:
+            with conn, conn.cursor() as cur:
+                yield cur
+        finally:
+            conn.close()
 
     def category_ids(self) -> dict[str, str]:
         """«Категория» и «Категория/Подкатегория» → id. Категорий нет — заводит стартовое дерево."""
@@ -236,3 +292,94 @@ class PostgresExpenseRepository:
             phones=frozenset(phone for kind, phone, _ in rows if kind == "own" and phone),
             credit_banks=frozenset(name for kind, _, name in rows if kind == "credit"),
         )
+
+    def operations(
+        self, start: date | None, end: date | None, category_id: str | None, uncategorized: bool
+    ) -> list[StoredOperation]:
+        """Операции по порядку; фильтры: период [start, end), категория с подкатегориями, разбор."""
+        with self._cursor() as cur:
+            cur.execute(
+                _OPERATIONS_SQL + " WHERE o.user_id = %(user)s"
+                " AND (%(start)s::date IS NULL OR o.operated_at >= %(start)s)"
+                " AND (%(end)s::date IS NULL OR o.operated_at < %(end)s)"
+                " AND (%(category)s::text IS NULL"
+                " OR o.category_id = %(category)s OR c.parent_id = %(category)s)"
+                " AND (NOT %(uncategorized)s OR c.system_code = 'uncategorized')"
+                " ORDER BY o.operated_at, o.bank_operation_id",
+                {
+                    "user": self._user_id,
+                    "start": start,
+                    "end": end,
+                    "category": category_id,
+                    "uncategorized": uncategorized,
+                },
+            )
+            return [_operation(row) for row in cur.fetchall()]
+
+    def operation(self, operation_id: str) -> StoredOperation | None:
+        """Одна операция; чужая или несуществующая — None."""
+        with self._cursor() as cur:
+            cur.execute(
+                _OPERATIONS_SQL + " WHERE o.user_id = %s AND o.id = %s",
+                (self._user_id, operation_id),
+            )
+            row = cur.fetchone()
+        return _operation(row) if row else None
+
+    def has_category(self, category_id: str) -> bool:
+        """Есть ли у пользователя такая категория."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM expense_categories WHERE user_id = %s AND id = %s",
+                (self._user_id, category_id),
+            )
+            return cur.fetchone() is not None
+
+    def set_category(
+        self, operation_id: str, category_id: str, rule: tuple[str, str] | None
+    ) -> StoredRule | None:
+        """Категория операции от пользователя; rule = (match_kind, pattern) — запомнить.
+
+        Правило без суммы на тот же шаблон одно: повторное «запомнить» меняет его категорию.
+        Неразобранные операции с тем же шаблоном раскладываются сразу.
+        """
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE expense_operations SET category_id = %s, category_source = 'user'"
+                " WHERE user_id = %s AND id = %s",
+                (category_id, self._user_id, operation_id),
+            )
+            if rule is None:
+                return None
+            match_kind, pattern = rule
+            cur.execute(
+                "UPDATE expense_rules SET category_id = %s"
+                " WHERE user_id = %s AND match_kind = %s AND pattern = %s AND amount IS NULL"
+                " RETURNING id",
+                (category_id, self._user_id, match_kind, pattern),
+            )
+            found = cur.fetchone()
+            rule_id = found[0] if found else uuid4().hex
+            if not found:
+                cur.execute(
+                    "INSERT INTO expense_rules (id, user_id, match_kind, pattern, category_id)"
+                    " VALUES (%s, %s, %s, %s, %s)",
+                    (rule_id, self._user_id, match_kind, pattern, category_id),
+                )
+            cur.execute(
+                "UPDATE expense_operations o SET category_id = %(category)s,"
+                " category_source = 'rule'"
+                " FROM expense_categories c"
+                " WHERE c.id = o.category_id AND c.system_code = 'uncategorized'"
+                " AND o.user_id = %(user)s"
+                " AND CASE WHEN %(kind)s = 'counterparty' THEN o.counterparty = %(pattern)s"
+                " ELSE position(lower(%(pattern)s)"
+                " IN lower(coalesce(o.merchant, '') || ' ' || o.description)) > 0 END",
+                {
+                    "category": category_id,
+                    "user": self._user_id,
+                    "kind": match_kind,
+                    "pattern": pattern,
+                },
+            )
+        return StoredRule(rule_id, match_kind, pattern, category_id)
