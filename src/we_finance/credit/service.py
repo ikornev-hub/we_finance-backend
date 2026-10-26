@@ -32,6 +32,7 @@ from we_finance.credit.schemas import (
     WarningOut,
 )
 from we_finance.credit.state import history_from, loan_overview, state_from
+from we_finance.payment_status import payment_status
 
 
 class CreditError(ValueError):
@@ -136,8 +137,18 @@ def build_calculation(loan: Loan, prepayments: Sequence[Prepayment], as_of: date
         prepaid_total=overview.prepaid_total,
         interest_saved=overview.interest_saved,
         months_saved=overview.months_saved,
-        schedule=[ScheduleItemOut(**asdict(row), past=row.date <= as_of) for row in rows],
-        history=[HistoryEntryOut.model_validate(e) for e in history_from(rows, applied, as_of)],
+        schedule=[
+            ScheduleItemOut(
+                **asdict(row),
+                past=row.date < as_of,
+                status=payment_status(row.date, as_of),
+            )
+            for row in rows
+        ],
+        history=[
+            HistoryEntryOut(**asdict(e), status=payment_status(e.date, as_of))
+            for e in history_from(rows, applied, as_of)
+        ],
         warnings=_warnings(_unused_prepayment(prepayments, applied, rows)),
     )
 
