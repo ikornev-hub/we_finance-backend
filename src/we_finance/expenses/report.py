@@ -281,7 +281,7 @@ def _month_groups(
             income,
         )
         for code in GROUP_ORDER
-        if code in known or any(c.group_code == code for c in categories)
+        if any(c.group_code == code for c in categories)  # пустую группу не показываем
     ]
 
 

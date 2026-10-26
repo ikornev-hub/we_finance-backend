@@ -11,7 +11,7 @@ from we_finance.credit.schedule import calculate
 from we_finance.expenses import analysis as analysis_rules
 from we_finance.expenses import goals as goal_rules
 from we_finance.expenses.categories import category_for
-from we_finance.expenses.classify import operation_type
+from we_finance.expenses.classify import OperationType, operation_type
 from we_finance.expenses.errors import ExpenseError, ExpenseNotFoundError
 from we_finance.expenses.goals import Goal
 from we_finance.expenses.income_check import ExpectedPayment, IncomeCheck, check_income
@@ -72,11 +72,16 @@ def import_statement(
         raise StatementFormatError(f"Банк {bank} пока не поддерживается")
     owner = repo.owner()
     rules = repo.rules()
+    loans = repo.ensure_loan_categories()
     statement = parser(source)
     items = []
     for op in statement.operations:
         kind = operation_type(op, owner)
-        items.append(ClassifiedOperation(op, kind, category_for(op, kind, rules)))
+        category = category_for(op, kind, rules)
+        if kind == OperationType.TRANSFER_CREDIT:  # в банк кредита — в подкатегорию кредита
+            text = op.description
+            category = next((path for bank, path in loans.items() if bank in text), category)
+        items.append(ClassifiedOperation(op, kind, category))
     period = (statement.period_from, statement.period_to)
     return repo.save_import(bank, file_name, items, period)
 
@@ -195,6 +200,9 @@ def update_category(
         if changes["name"] is None:
             raise ExpenseError("Имя категории не может быть пустым")
         repo.rename_category(category_id, str(changes["name"]))
+    if "parent_id" in changes:
+        _move(repo, category, changes["parent_id"])  # type: ignore[arg-type]
+        category = _category(repo, category_id)
     if "group_id" in changes:
         if category.parent_id is not None:
             raise ExpenseError("Группа задаётся только категории верхнего уровня")
@@ -211,12 +219,44 @@ def update_category(
     return _category(repo, category_id)
 
 
-def delete_category(repo: PostgresExpenseRepository, category_id: str) -> None:
-    """Подкатегория отдаёт операции родителю; категория — в «Неопределённые» с подкатегориями."""
+# Системные, на которые опирается автоматика: их не удалить и не перенести внутрь другой.
+_FIXED = {"credit", "housing", "income", "own_transfer", "savings", "uncategorized", "cash"}
+
+
+def _move(repo: PostgresExpenseRepository, category: StoredCategory, parent_id: str | None) -> None:
+    """Перенести категорию внутрь другой или наверх; уровней два."""
+    if category.system_code in _FIXED:
+        raise ExpenseError(f"«{category.name}» — системная: перенести нельзя")
+    if parent_id is None:
+        if category.parent_id is not None:
+            managed = next(g.id for g in repo.groups() if g.code == "managed")
+            repo.reparent_category(category.id, None)
+            repo.set_category_group(category.id, managed)
+        return
+    parent = _category(repo, parent_id)
+    if parent.id == category.id or parent.parent_id is not None:
+        raise ExpenseError("Переносить можно только внутрь категории верхнего уровня")
+    if category.children:
+        raise ExpenseError(f"У «{category.name}» есть подкатегории — сначала влей их в неё")
+    repo.reparent_category(category.id, parent.id)
+
+
+def delete_category(
+    repo: PostgresExpenseRepository, category_id: str, move_to: str | None = None
+) -> None:
+    """Удалить; операции и правила — в move_to.
+
+    По умолчанию подкатегория отдаёт всё родителю, категория верхнего уровня — в
+    «Неопределённые» (вместе с подкатегориями). Правила не теряются.
+    """
     category = _category(repo, category_id)
     if category.system_code is not None:
         raise ExpenseError(f"«{category.name}» — системная: удалить нельзя, только переименовать")
-    move_to = category.parent_id or repo.system_category_id("uncategorized")
+    if move_to is None:
+        move_to = category.parent_id or repo.system_category_id("uncategorized")
+    target = _category(repo, move_to)
+    if category.id in (target.id, target.parent_id):
+        raise ExpenseError("Переносить операции в удаляемую категорию нельзя")
     repo.delete_category(category_id, move_to)
 
 

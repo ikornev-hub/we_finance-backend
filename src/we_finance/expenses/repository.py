@@ -35,7 +35,6 @@ SYSTEM_CODES = {
     UNCATEGORIZED: "uncategorized",
     CREDIT: "credit",
     INCOME: "income",
-    "Маркетплейсы": "marketplace",
     OWN_TRANSFER: "own_transfer",
     HOUSING: "housing",
     CASH: "cash",
@@ -200,12 +199,17 @@ class _Categories(Postgres):
                 " WHERE c.user_id = %s",
                 (self._user_id,),
             )
-            ids = {}
-            for category_id, name, parent, code in cur.fetchall():
-                ids[f"{parent}/{name}" if parent else name] = category_id
-                if code in CODE_NAMES:
-                    ids[CODE_NAMES[code]] = category_id
-            return ids
+            rows = cur.fetchall()
+        ids = {}
+        codes = {name: code for _, name, parent, code in rows if not parent and code}
+        for category_id, name, parent, code in rows:
+            ids[f"{parent}/{name}" if parent else name] = category_id
+            if code in CODE_NAMES:
+                ids[CODE_NAMES[code]] = category_id
+            # «Кредит/Автокредит ОТП» находится, даже если «Кредит» переименовали.
+            if parent and codes.get(parent) in CODE_NAMES:
+                ids[f"{CODE_NAMES[codes[parent]]}/{name}"] = category_id
+        return ids
 
     def _ensure_tree(self, cur) -> None:
         """Первый вход в «Расходы» — стартовое дерево; появилась новая системная — дозавести."""
@@ -527,8 +531,50 @@ class _Categories(Postgres):
             )
             return dict(cur.fetchall())
 
+    def reparent_category(self, category_id: str, parent_id: str | None) -> None:
+        """Перенести категорию внутрь другой (parent_id) или наверх (None).
+
+        У подкатегории нет ни группы, ни границы: они — у верхнего уровня.
+        """
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE expense_categories SET parent_id = %s,"
+                " group_id = CASE WHEN %s IS NULL THEN group_id END,"
+                " target_share = CASE WHEN %s IS NULL THEN target_share END,"
+                " target_amount = CASE WHEN %s IS NULL THEN target_amount END"
+                " WHERE user_id = %s AND id = %s",
+                (parent_id, parent_id, parent_id, parent_id, self._user_id, category_id),
+            )
+
+    def ensure_loan_categories(self) -> dict[str, str]:
+        """Подкатегория «Кредит/<название кредита>» на каждый кредит; счёт кредита → путь.
+
+        Возвращает: имя счёта кредита из «Моих счетов» (как его пишет банк) → «Кредит/<кредит>».
+        """
+        with self._cursor() as cur:
+            self._ensure_tree(cur)
+            cur.execute(
+                "SELECT id, name FROM expense_categories"
+                " WHERE user_id = %s AND system_code = 'credit'",
+                (self._user_id,),
+            )
+            credit_id, credit_name = cur.fetchone()
+            cur.execute("SELECT name FROM loans WHERE user_id = %s", (self._user_id,))
+            for (loan,) in cur.fetchall():
+                cur.execute(
+                    "INSERT INTO expense_categories (id, user_id, parent_id, name)"
+                    " VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                    (uuid4().hex, self._user_id, credit_id, loan),
+                )
+            cur.execute(
+                "SELECT a.name, l.name FROM expense_accounts a JOIN loans l ON l.id = a.loan_id"
+                " WHERE a.user_id = %s AND a.kind = 'credit'",
+                (self._user_id,),
+            )
+            return {bank: f"{credit_name}/{loan}" for bank, loan in cur.fetchall()}
+
     def delete_category(self, category_id: str, move_to: str) -> None:
-        """Удалить с подкатегориями: их операции — в move_to, их правила — удалить."""
+        """Удалить с подкатегориями: их операции и правила — в move_to (правила не теряются)."""
         with self._cursor() as cur:
             cur.execute(
                 "SELECT id FROM expense_categories WHERE user_id = %s AND parent_id = %s",
@@ -541,8 +587,9 @@ class _Categories(Postgres):
                 (move_to, self._user_id, ids),
             )
             cur.execute(
-                "DELETE FROM expense_rules WHERE user_id = %s AND category_id = ANY(%s)",
-                (self._user_id, ids),
+                "UPDATE expense_rules SET category_id = %s"
+                " WHERE user_id = %s AND category_id = ANY(%s)",
+                (move_to, self._user_id, ids),
             )
             cur.execute(
                 "DELETE FROM expense_categories WHERE user_id = %s AND parent_id = %s",

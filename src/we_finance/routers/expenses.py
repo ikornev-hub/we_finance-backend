@@ -118,6 +118,7 @@ class CategoryPatch(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     name: Name | None = None
+    parent_id: str | None = None  # перенести внутрь категории; null — наверх
     group_id: str | None = None  # null — «Служебные»
     target_share: Share | None = None
     target_amount: Amount | None = None
@@ -152,9 +153,9 @@ def update_category(repo: Repo, category_id: str, patch: CategoryPatch) -> Store
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить категорию",
 )
-def delete_category(repo: Repo, category_id: str) -> Response:
-    """Подкатегория → операции родителю; категория → в «Неопределённые»; системная — 422."""
-    service.delete_category(repo, category_id)
+def delete_category(repo: Repo, category_id: str, move_to: str | None = None) -> Response:
+    """Операции и правила — в move_to; по умолчанию к родителю (верхний уровень — в разбор)."""
+    service.delete_category(repo, category_id, move_to)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
