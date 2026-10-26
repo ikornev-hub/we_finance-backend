@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/ikornev-hub/we_finance-backend/compare/v0.4.0...v0.5.0) (2026-10-26)
+
+
+### Features
+
+* store salary profile in postgres ([#35](https://github.com/ikornev-hub/we_finance-backend/issues/35)) ([e5a8b3f](https://github.com/ikornev-hub/we_finance-backend/commit/e5a8b3f9117c10688598c7534db41dc39e9d4db7))
+
 ## [0.4.0](https://github.com/ikornev-hub/we_finance-backend/compare/v0.3.0...v0.4.0) (2026-10-25)
 
 
