@@ -26,7 +26,9 @@ class Owner:
     credit_banks: frozenset[str] = frozenset()
 
 
-_INCOME = ("ЗАРАБОТНАЯ ПЛАТА", "АВАНС ПО ЗАРАБОТНОЙ ПЛАТЕ")
+_INCOME = ("ЗАРАБОТНАЯ ПЛАТА", "АВАНС ПО ЗАРАБОТНОЙ ПЛАТЕ", "ОТПУСКНЫЕ")
+# Между своими счетами в Альфе — в обе стороны одинаково.
+_OWN = "Внутрибанковский перевод между счетами"
 
 
 def operation_type(op: StatementOperation, owner: Owner) -> OperationType:
@@ -40,10 +42,7 @@ def _incoming_type(op: StatementOperation, owner: Owner) -> OperationType:
     """Пришли деньги: доход, от себя или от человека."""
     if op.description.startswith(_INCOME):
         return OperationType.INCOME
-    if (
-        "Внутрибанковский перевод между счетами" in op.description
-        or op.counterparty in owner.phones
-    ):
+    if _OWN in op.description or op.counterparty in owner.phones:
         return OperationType.TRANSFER_OWN
     return OperationType.TRANSFER_IN
 
@@ -53,7 +52,7 @@ def _outgoing_type(op: StatementOperation, owner: Owner) -> OperationType:
     text = op.description
     if op.mcc or "Исходящий платеж QR" in text:
         return OperationType.CARD
-    if "Перевод собственных средств" in text:
+    if _OWN in text or "Перевод собственных средств" in text:
         if any(bank in text for bank in owner.credit_banks):
             return OperationType.TRANSFER_CREDIT
         return OperationType.TRANSFER_OWN
