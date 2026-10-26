@@ -38,8 +38,24 @@ def _money(text: str) -> Decimal:
     return Decimal(text.replace("\xa0", "").replace(" ", "").replace(",", "."))
 
 
-def parse_alfa(source: Path | BinaryIO) -> list[StatementOperation]:
-    """Выписка Альфа-Банка (XLSX): таблица начинается под строкой «Дата операции»."""
+@dataclass(frozen=True)
+class Statement:
+    """Выписка целиком: за какой период и какие операции."""
+
+    period_from: date | None
+    period_to: date | None
+    operations: list[StatementOperation]
+
+
+_PERIOD = re.compile(r"За период с (\d{2}\.\d{2}\.\d{4}) по (\d{2}\.\d{2}\.\d{4})")
+
+
+def _day(text: str) -> date:
+    return datetime.strptime(text, "%d.%m.%Y").date()
+
+
+def read_alfa(source: Path | BinaryIO) -> Statement:
+    """Выписка Альфа-Банка (XLSX): период из шапки, таблица — под строкой «Дата операции»."""
     rows = list(
         openpyxl.load_workbook(source, read_only=True, data_only=True).active.iter_rows(
             values_only=True
@@ -48,8 +64,31 @@ def parse_alfa(source: Path | BinaryIO) -> list[StatementOperation]:
     header = next((i for i, row in enumerate(rows) if row and row[0] == "Дата операции"), None)
     if header is None:
         raise StatementFormatError("Это не выписка Альфа-Банка: нет таблицы «Дата операции»")
+    period = next(
+        (
+            found
+            for row in rows[:header]
+            for cell in row or ()
+            if cell and (found := _PERIOD.search(str(cell)))
+        ),
+        None,
+    )
+    return Statement(
+        _day(period.group(1)) if period else None,
+        _day(period.group(2)) if period else None,
+        _operations(rows[header + 1 :]),
+    )
+
+
+def parse_alfa(source: Path | BinaryIO) -> list[StatementOperation]:
+    """Операции выписки Альфа-Банка (без шапки)."""
+    return read_alfa(source).operations
+
+
+def _operations(rows: list[tuple]) -> list[StatementOperation]:
+    """Строки таблицы операций → операции; строки не с датой пропускаются."""
     operations = []
-    for row in rows[header + 1 :]:
+    for row in rows:
         if not row or not row[0] or not _DAY.fullmatch(str(row[0])):
             continue
         description = str(row[11])
@@ -60,7 +99,7 @@ def parse_alfa(source: Path | BinaryIO) -> list[StatementOperation]:
             StatementOperation(
                 bank="alfa",
                 bank_operation_id=str(row[3]),
-                day=datetime.strptime(str(row[0]), "%d.%m.%Y").date(),
+                day=_day(str(row[0])),
                 amount=_money(str(row[12])),
                 description=description,
                 mcc=mcc.group(1) if mcc else None,

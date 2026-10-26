@@ -1,7 +1,7 @@
 """Сценарии «Расходов» поверх ядра и хранилища. Про HTTP не знает."""
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import BinaryIO
 
@@ -11,6 +11,7 @@ from we_finance.credit.schedule import calculate
 from we_finance.expenses.categories import category_for
 from we_finance.expenses.classify import operation_type
 from we_finance.expenses.errors import ExpenseError, ExpenseNotFoundError
+from we_finance.expenses.income_check import ExpectedPayment, IncomeCheck, check_income
 from we_finance.expenses.report import MonthPlan, MonthReport, build_month
 from we_finance.expenses.repository import (
     ClassifiedOperation,
@@ -22,11 +23,11 @@ from we_finance.expenses.repository import (
     StoredOperation,
     StoredRule,
 )
-from we_finance.expenses.statement import StatementFormatError, parse_alfa
+from we_finance.expenses.statement import StatementFormatError, read_alfa
 from we_finance.salary import service as salary_service
 from we_finance.salary.repository import SalaryRepository
 
-PARSERS = {"alfa": parse_alfa}
+PARSERS = {"alfa": read_alfa}
 
 
 @dataclass(frozen=True)
@@ -67,11 +68,13 @@ def import_statement(
         raise StatementFormatError(f"Банк {bank} пока не поддерживается")
     owner = repo.owner()
     rules = repo.rules()
+    statement = parser(source)
     items = []
-    for op in parser(source):
+    for op in statement.operations:
         kind = operation_type(op, owner)
         items.append(ClassifiedOperation(op, kind, category_for(op, kind, rules)))
-    return repo.save_import(bank, file_name, items)
+    period = (statement.period_from, statement.period_to)
+    return repo.save_import(bank, file_name, items, period)
 
 
 def list_operations(
@@ -244,3 +247,20 @@ def month_report(
     start, end = month_range(month)
     plan = month_plan(repo, salary_repo, loan_repo, month)
     return build_month(month, repo.limited_tree(), repo.month_flows(start, end), plan)
+
+
+# ---------- сверка доходов ----------
+
+
+def income_check(
+    repo: PostgresExpenseRepository, salary_repo: SalaryRepository, year: int, today: date
+) -> list[IncomeCheck]:
+    """Каждая выплата года из «Доходов» — пришла ли по выписке. Профиля нет — пусто."""
+    try:
+        payments = salary_service.year(salary_repo, year)
+    except salary_service.ProfileNotFoundError, salary_service.SalaryError:
+        return []
+    expected = [ExpectedPayment(p.date, str(p.kind), p.net) for p in payments]
+    window = timedelta(days=10)
+    receipts = repo.income_receipts(date(year, 1, 1) - window, date(year + 1, 1, 1) + window)
+    return check_income(expected, receipts, repo.statement_periods(), today)

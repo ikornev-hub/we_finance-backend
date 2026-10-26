@@ -21,6 +21,7 @@ from we_finance.expenses.categories import (
 )
 from we_finance.expenses.classify import OperationType, Owner
 from we_finance.expenses.errors import ExpenseError
+from we_finance.expenses.income_check import Receipt
 from we_finance.expenses.report import Flow, LimitedCategory
 from we_finance.expenses.statement import StatementOperation
 
@@ -507,7 +508,11 @@ class PostgresExpenseRepository(_Categories, _Accounts):
     """Расходы одного пользователя: категории, счета, загрузки, операции, правила."""
 
     def save_import(
-        self, bank: str, file_name: str, items: list[ClassifiedOperation]
+        self,
+        bank: str,
+        file_name: str,
+        items: list[ClassifiedOperation],
+        period: tuple[date | None, date | None] = (None, None),
     ) -> ImportResult:
         """Сохранить загрузку; операции, которые уже были, пропускаются (UNIQUE в базе)."""
         ids = self.category_ids()
@@ -519,9 +524,10 @@ class PostgresExpenseRepository(_Categories, _Accounts):
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO expense_imports (id, user_id, bank, file_name)"
-                        " VALUES (%s, %s, %s, %s)",
-                        (import_id, self._user_id, bank, file_name),
+                        "INSERT INTO expense_imports"
+                        " (id, user_id, bank, file_name, period_from, period_to)"
+                        " VALUES (%s, %s, %s, %s, %s, %s)",
+                        (import_id, self._user_id, bank, file_name, *period),
                     )
                     for item in items:
                         op = item.operation
@@ -699,3 +705,31 @@ class PostgresExpenseRepository(_Categories, _Accounts):
                 (self._user_id, start, end),
             )
             return {row[0]: Flow(*row[1:]) for row in cur.fetchall()}
+
+    def statement_periods(self) -> list[tuple[date, date]]:
+        """За какие дни есть выписки: период из шапки, иначе — от первой до последней операции."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT coalesce(i.period_from, min(o.operated_at)::date),"
+                " coalesce(i.period_to, max(o.operated_at)::date)"
+                " FROM expense_imports i"
+                " LEFT JOIN expense_operations o ON o.import_id = i.id"
+                " WHERE i.user_id = %s GROUP BY i.id",
+                (self._user_id,),
+            )
+            return [(start, end) for start, end in cur.fetchall() if start and end]
+
+    def income_receipts(self, start: date, end: date) -> list[Receipt]:
+        """Поступления в «Доход» (с подкатегориями) за период [start, end)."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT o.operated_at::date, o.amount, o.description FROM expense_operations o"
+                " JOIN expense_categories c ON c.id = o.category_id"
+                " LEFT JOIN expense_categories p ON p.id = c.parent_id"
+                " WHERE o.user_id = %s AND o.amount > 0"
+                " AND 'income' IN (c.system_code, p.system_code)"
+                " AND o.operated_at >= %s AND o.operated_at < %s"
+                " ORDER BY o.operated_at",
+                (self._user_id, start, end),
+            )
+            return [Receipt(*row) for row in cur.fetchall()]

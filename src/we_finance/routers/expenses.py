@@ -1,5 +1,6 @@
 """Расходы: выписки, операции, категории, счета (требования system/expenses.md §3)."""
 
+from datetime import date
 from decimal import Decimal
 from io import BytesIO
 from typing import Annotated, Literal, Self
@@ -9,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from we_finance.credit.repository import LoanRepository
 from we_finance.expenses import service
+from we_finance.expenses.income_check import IncomeCheck
 from we_finance.expenses.report import MonthReport
 from we_finance.expenses.repository import (
     ImportResult,
@@ -23,6 +25,7 @@ from we_finance.routers.deps import (
     get_expense_repository,
     get_repository,
     get_salary_repository,
+    get_today,
 )
 from we_finance.salary.repository import SalaryRepository
 
@@ -190,3 +193,17 @@ def month_report(
 ) -> MonthReport:
     """Факт по выписке; прогноз — больше из плана («Доходы», «Кредиты», правила жилья) и факта."""
     return service.month_report(repo, salary_repo, loan_repo, month)
+
+
+# ---------- сверка доходов ----------
+
+
+@router.get("/income-check/{year}", summary="Пришли ли выплаты по выписке (Р4)")
+def income_check(
+    repo: Repo,
+    salary_repo: Annotated[SalaryRepository, Depends(get_salary_repository)],
+    today: Annotated[date, Depends(get_today)],
+    year: Annotated[int, Path(ge=2000, le=2100)],
+) -> list[IncomeCheck]:
+    """Выплаты года по «Доходам» против поступлений в «Доход»: окно ±5 дней, аванс — по слову."""
+    return service.income_check(repo, salary_repo, year, today)
