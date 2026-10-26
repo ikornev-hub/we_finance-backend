@@ -4,7 +4,7 @@
 Ни базы, ни HTTP — удобно проверять unit-тестами на эталоне.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import ROUND_HALF_UP, Decimal
 
 CENT = Decimal("0.01")
@@ -116,6 +116,8 @@ class MonthForecast:  # pylint: disable=too-many-instance-attributes  # поля
     can_spend: Decimal  # располагаемый − потрачено
     limits_total: Decimal
     unallocated: Decimal  # располагаемый − сумма границ
+    # обязательные по категориям: кредит — платёж по графику, жильё — по правилу (или факт)
+    mandatory_by_category: dict[str, Decimal] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -245,19 +247,26 @@ def _warnings(
     return warnings
 
 
-def _forecast_mandatory(
+def _mandatory_by_category(
     mandatory: list[LimitedCategory], flows: dict[str, Flow], plan: MonthPlan
-) -> Decimal:
-    """Обязательные прогноза: по каждой категории больше из плана и факта."""
-    total = ZERO
+) -> dict[str, Decimal]:
+    """Обязательные прогноза по категориям: больше из плана и факта."""
+    result = {}
     for category in mandatory:
         planned = (
             plan.credit
             if category.system_code == "credit"
             else plan.mandatory.get(category.id, ZERO)
         )
-        total += max(planned, _total(flows, category, "outflow"))
-    return total
+        result[category.id] = _money(max(planned, _total(flows, category, "outflow")))
+    return result
+
+
+def _forecast_mandatory(
+    mandatory: list[LimitedCategory], flows: dict[str, Flow], plan: MonthPlan
+) -> Decimal:
+    """Обязательные прогноза: по каждой категории больше из плана и факта."""
+    return sum(_mandatory_by_category(mandatory, flows, plan).values(), ZERO)
 
 
 def _income(tree: list[LimitedCategory], flows: dict[str, Flow]) -> Decimal:
@@ -377,7 +386,12 @@ def build_month(  # pylint: disable=too-many-arguments,too-many-positional-argum
         has_statement=_has_statement(flows),
         closed=closed,
         warnings=_warnings(month, _has_statement(flows), base, month_groups),
-        forecast=_month_forecast(planned, categories, month_groups),
+        forecast=replace(
+            _month_forecast(planned, categories, month_groups),
+            mandatory_by_category=_mandatory_by_category(
+                [c for c in spending if _group_code(c) == MANDATORY], flows, plan
+            ),
+        ),
         groups=month_groups,
         categories=sorted(categories, key=lambda c: (-c.amount, c.name)),
     )
