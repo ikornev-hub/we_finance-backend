@@ -110,12 +110,12 @@ class MonthForecast:  # pylint: disable=too-many-instance-attributes  # поля
 
     income: Decimal
     mandatory: Decimal  # Σ обязательных: кредит, жильё, связь, близкие…
-    savings: Decimal  # отложить на цели: «сначала себе»
-    disposable: Decimal  # доход − обязательные − отложить
+    savings: Decimal  # отложить на цели: min(Σ планов, свободно до целей), отложил больше — факт
+    disposable: Decimal  # доход − обязательные: база долей и границ
     spent: Decimal  # потрачено из располагаемого (всё, кроме обязательных)
-    can_spend: Decimal  # располагаемый − потрачено
+    can_spend: Decimal  # располагаемый − отложить − потрачено
     limits_total: Decimal
-    unallocated: Decimal  # располагаемый − сумма границ
+    unallocated: Decimal  # «Свободно»: располагаемый − отложить − сумма границ
     # обязательные по категориям: кредит — платёж по графику, жильё — по правилу (или факт)
     mandatory_by_category: dict[str, Decimal] = field(default_factory=dict)
 
@@ -320,17 +320,22 @@ def _month_forecast(
     planned: tuple[Decimal, Decimal, Decimal],
     categories: list[MonthCategory],
     groups: list[MonthGroup],
+    saved: Decimal = ZERO,
 ) -> MonthForecast:
     """Блок прогноза: (доход, обязательные, отложить) → располагаемый, потрачено, распределено.
 
     Располагаемый = доход − обязательные: от него доли и границы (решение 2026-10-27).
     Цели в приоритете, но в базу не входят — их план меняется (старт, урезание, сдвиг срока),
     а проценты границ должны значить одни и те же рубли. Цели вычитаются из «можно ещё».
+
+    Отложить (§2.7, #50) = min(Σ планов, max(располагаемый − Σ границ, 0)): на все планы
+    не хватает — в цели уходит столько, сколько влезает; отложил больше — считаем факт.
     """
-    income, mandatory, savings = planned
+    income, mandatory, plan_savings = planned
     base = _money(income - mandatory)
     spent = sum((c.amount for c in categories if c.group_code != MANDATORY), ZERO)
     limits_total = sum((_group_limit(g) for g in groups), ZERO)
+    savings = max(min(plan_savings, max(base - limits_total, ZERO)), saved)
     return MonthForecast(
         income=_money(income),
         mandatory=_money(mandatory),
@@ -430,7 +435,7 @@ def build_month(  # pylint: disable=too-many-arguments,too-many-positional-argum
         closed=closed,
         warnings=_warnings(month, _has_statement(flows), base, month_groups),
         forecast=replace(
-            _month_forecast(planned, categories, month_groups),
+            _month_forecast(planned, categories, month_groups, saved),
             mandatory_by_category=_mandatory_by_category(
                 [c for c in spending if _group_code(c) == MANDATORY], flows, plan
             ),

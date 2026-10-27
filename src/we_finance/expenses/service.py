@@ -669,9 +669,8 @@ def goals_view(
     loans = LoanGoals(loan_repo, salary_repo, today)
     states = projected_states(repo, salary_repo, loan_repo, start, today)
     report = month_report(repo, salary_repo, loan_repo, month, today, states)
-    total = sum((s.plan for s in states), ZERO)
-    shortage = max(-report.forecast.unallocated, ZERO)  # границы трат не влезают в остаток
-    real = goal_rules.allocate({s.goal.id: s.plan for s in states}, total - shortage)
+    # прогноз уже посчитал, сколько влезает в цели (§2.7, #50): делим именно это
+    real = goal_rules.allocate({s.goal.id: s.plan for s in states}, report.forecast.savings)
     tails: dict[str, list[str]] = {}
     for tail, goal_id in repo.savings_accounts().items():
         tails.setdefault(goal_id, []).append(tail)
