@@ -210,7 +210,7 @@ def category_reason(
     Перевод себе — нейтральный в обе стороны (Решение 2026-10-27): не трата и не доход.
     Наличные — укажи, куда ушли: система этого не знает (Решение 2026-10-27).
     """
-    if kind == OperationType.TRANSFER_OWN:
+    if kind == OperationType.TRANSFER_OWN and not _to_own_phone(op):
         return OWN_TRANSFER, "перевод себе" if op.amount < 0 else "пришло от себя"
     if op.mcc in CASH_MCC:
         return UNCATEGORIZED, "снял наличные — укажи, куда ушли"
@@ -232,5 +232,18 @@ def _guess(op: StatementOperation, kind: OperationType, rules: list[Rule]) -> tu
     people = {
         OperationType.TRANSFER_PERSON: "перевод человеку — реши сам",
         OperationType.TRANSFER_IN: "пришло от человека — реши сам",
+        OperationType.TRANSFER_OWN: "перевод на свой номер — укажи, куда",
     }
     return UNCATEGORIZED, people.get(kind, "не распознано")
+
+
+# Перевод себе, о котором известно, что он себе: между счетами Альфы и «собственных средств в банк».
+_OWN_BY_TEXT = ("Внутрибанковский перевод между счетами", "Перевод собственных средств")
+
+
+def _to_own_phone(op: StatementOperation) -> bool:
+    """Ушло СБП на свой номер (Решение 2026-10-27): свой банк и не только — куда, решает человек.
+
+    Идёт обычным путём — правило «запомнить», справочник, иначе «Неопределённые».
+    """
+    return op.amount < 0 and not any(text in op.description for text in _OWN_BY_TEXT)
