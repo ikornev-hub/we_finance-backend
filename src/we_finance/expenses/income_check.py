@@ -53,23 +53,45 @@ class IncomeCheck:
     difference: Decimal | None  # пришло − ожидали
 
 
-def _same_kind(payment: ExpectedPayment, receipt: Receipt) -> bool:
-    """Аванс в выписке Альфы помечен словом «АВАНС»; всё остальное — нет."""
-    is_advance = "АВАНС" in receipt.description.upper()
-    return is_advance == (payment.kind == "advance")
+def _receipt_kind(receipt: Receipt) -> str | None:
+    """Вид поступления по словам в описании Альфы; None — по описанию не понять."""
+    text = receipt.description.upper()
+    if "АВАНС" in text:  # «АВАНС ПО ЗАРАБОТНОЙ ПЛАТЕ» — аванс, а не остаток
+        return "advance"
+    if "ОТПУСК" in text:
+        return "vacation"
+    if any(word in text for word in ("БОЛЬНИЧ", "ПОСОБ", "НЕТРУДОСП")):
+        return "sick"
+    if "ЗАРАБОТН" in text:
+        return "remainder"
+    return None
+
+
+def _payment_kind(payment: ExpectedPayment) -> str:
+    """Больничный от работодателя и от СФР в выписке не различить — один вид."""
+    return "sick" if payment.kind.startswith("sick") else payment.kind
 
 
 def _pick(payment: ExpectedPayment, receipts: list[Receipt]) -> Receipt | None:
-    """Лучшее поступление в окне: того же вида, ближе по дате, ближе по сумме."""
-    near = [r for r in receipts if abs((r.date - payment.date).days) <= WINDOW_DAYS]
+    """Поступление в окне: явно другого вида не берём.
+
+    Дальше — тот же вид, ближе по сумме, ближе по дате. Сумма важнее даты (#51):
+    перевод в тот же день не должен перебивать отпускные днём раньше.
+    """
+    kind = _payment_kind(payment)
+    near = [
+        r
+        for r in receipts
+        if abs((r.date - payment.date).days) <= WINDOW_DAYS and _receipt_kind(r) in (None, kind)
+    ]
     if not near:
         return None
     return min(
         near,
         key=lambda r: (
-            not _same_kind(payment, r),
-            abs((r.date - payment.date).days),
+            _receipt_kind(r) != kind,
             abs(r.amount - payment.amount),
+            abs((r.date - payment.date).days),
         ),
     )
 
