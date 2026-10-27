@@ -306,6 +306,15 @@ def _check_limit(share: Decimal | None, amount: Decimal | None) -> None:
         raise ExpenseError("Граница — либо в процентах, либо суммой, не обе сразу")
 
 
+def _limit_forbidden(repo: PostgresExpenseRepository, group_id: str | None) -> str | None:
+    """Почему у категории этой группы не бывает границы; None — можно (system/expenses.md §2.6)."""
+    if group_id is None:
+        return "У «Служебных» границы нет: это не статья трат"
+    if _group(repo, group_id).code == "mandatory":
+        return "У «Обязательных» границы нет: они вычитаются из дохода"
+    return None
+
+
 def create_category(
     repo: PostgresExpenseRepository,
     name: str,
@@ -331,6 +340,10 @@ def create_category(
     if parent_id is None:  # новая верхнего уровня — в «Управляемые», если не сказано иначе
         group_id = group or next(g.id for g in repo.groups() if g.code == "managed")
         _group(repo, group_id)
+        if target_share is not None or target_amount is not None:
+            reason = _limit_forbidden(repo, group_id)
+            if reason:
+                raise ExpenseError(reason)
     category_id = repo.add_category(name, parent_id, target_share, group_id)
     if target_amount is not None:
         repo.set_limit(category_id, None, target_amount)
@@ -352,18 +365,26 @@ def update_category(
     if "group_id" in changes:
         if category.parent_id is not None:
             raise ExpenseError("Группа задаётся только категории верхнего уровня")
-        if changes["group_id"] is not None:
-            _group(repo, str(changes["group_id"]))
-        repo.set_category_group(category_id, changes["group_id"])  # type: ignore[arg-type]
+        new_group = changes["group_id"]
+        if new_group is not None:
+            _group(repo, str(new_group))
+        # граница проверяется по группе, в которой категория окажется, а не по старой
+        if "target_share" not in changes and "target_amount" not in changes:
+            has_limit = category.target_share is not None or category.target_amount is not None
+            if has_limit and _limit_forbidden(repo, new_group):  # type: ignore[arg-type]
+                repo.set_limit(category_id, None, None)  # в «Обязательных» и «Служебных» её нет
+        repo.set_category_group(category_id, new_group)  # type: ignore[arg-type]
+        category = _category(repo, category_id)
     if "target_share" in changes or "target_amount" in changes:
         share = changes.get("target_share")
         amount = changes.get("target_amount")
         _check_limit(share, amount)  # type: ignore[arg-type]
-        if category.parent_id is not None and (share is not None or amount is not None):
-            raise ExpenseError("Граница задаётся только категории верхнего уровня")
-        if (share is not None or amount is not None) and category.group_id is not None:
-            if _group(repo, category.group_id).code == "mandatory":
-                raise ExpenseError("У «Обязательных» границы нет: они вычитаются из дохода")
+        if share is not None or amount is not None:
+            if category.parent_id is not None:
+                raise ExpenseError("Граница задаётся только категории верхнего уровня")
+            reason = _limit_forbidden(repo, category.group_id)
+            if reason:
+                raise ExpenseError(reason)
         repo.set_limit(category_id, share, amount)  # type: ignore[arg-type]
     return _category(repo, category_id)
 
