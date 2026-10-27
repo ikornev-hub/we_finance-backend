@@ -7,7 +7,7 @@ from typing import Annotated, Literal, Self
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Path, Query, Response, UploadFile, status
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
 from we_finance.credit.repository import LoanRepository
 from we_finance.expenses import service
@@ -37,14 +37,49 @@ router = APIRouter(prefix="/expenses", tags=["expenses"])
 Repo = Annotated[PostgresExpenseRepository, Depends(get_expense_repository)]
 
 
-@router.post("/imports", status_code=status.HTTP_201_CREATED, summary="Загрузить выписку (Р1)")
-def import_statement(
+class ImportOverrideIn(BaseModel):
+    """Правка при проверке выписки."""
+
+    bank_operation_id: str
+    category_id: str
+    remember: bool = False
+
+
+_OVERRIDES = TypeAdapter(list[ImportOverrideIn])
+
+
+@router.post("/imports/preview", summary="Проверить выписку перед сохранением (Р1)")
+def preview_import(
     repo: Repo,
+    loan_repo: Annotated[LoanRepository, Depends(get_repository)],
     bank: Annotated[str, Form()],
     file: Annotated[UploadFile, File()],
+) -> service.ImportPreview:
+    """Новые операции с категорией и причиной; в базу ничего не пишет."""
+    return service.preview_import(repo, bank, BytesIO(file.file.read()), loan_repo)
+
+
+@router.post("/imports", status_code=status.HTTP_201_CREATED, summary="Сохранить выписку (Р1)")
+def import_statement(
+    repo: Repo,
+    loan_repo: Annotated[LoanRepository, Depends(get_repository)],
+    bank: Annotated[str, Form()],
+    file: Annotated[UploadFile, File()],
+    overrides: Annotated[str, Form()] = "[]",
 ) -> ImportResult:
-    """Файл выписки → операции с типом и категорией; уже загруженные пропускаются."""
-    return service.import_statement(repo, bank, file.filename or "", BytesIO(file.file.read()))
+    """Тот же файл + правки проверки (JSON-список) → операции в базе; дубли пропускаются."""
+    try:
+        chosen = _OVERRIDES.validate_json(overrides)
+    except ValidationError as exc:
+        raise service.ExpenseError(f"Правки не читаются: {exc.errors()[0]['msg']}") from exc
+    return service.import_statement(
+        repo,
+        bank,
+        file.filename or "",
+        BytesIO(file.file.read()),
+        [service.ImportOverride(**item.model_dump()) for item in chosen],
+        loan_repo,
+    )
 
 
 class CategoryChangeIn(BaseModel):

@@ -192,23 +192,44 @@ def _refine(category: str, op: StatementOperation) -> str:
 
 
 def category_for(op: StatementOperation, kind: OperationType, rules: list[Rule]) -> str:
-    """Категория «Категория/Подкатегория».
+    """Категория «Категория/Подкатегория»."""
+    return category_reason(op, kind, rules)[0]
+
+
+_FIXED_REASON = {
+    OperationType.TRANSFER_CREDIT: (CREDIT, "перевод в кредит"),
+    OperationType.TRANSFER_SAVINGS: (SAVINGS, "накопления: вклад, экспресс-счёт"),
+    OperationType.INCOME: (INCOME, "начисление: зарплата, премия, пособие, кэшбэк"),
+}
+
+
+def category_reason(
+    op: StatementOperation, kind: OperationType, rules: list[Rule]
+) -> tuple[str, str]:
+    """Категория и почему она: правило, справочник, MCC или «не распознано» (для проверки выписки).
 
     Перевод себе: ушло — «Переводы себе» (расход), пришло — решает пользователь.
     """
     if kind == OperationType.TRANSFER_OWN:
-        return OWN_TRANSFER if op.amount < 0 else UNCATEGORIZED
-    fixed = {
-        OperationType.TRANSFER_CREDIT: CREDIT,
-        OperationType.TRANSFER_SAVINGS: SAVINGS,
-        OperationType.INCOME: INCOME,
+        own = (OWN_TRANSFER, "перевод себе")
+        return own if op.amount < 0 else (UNCATEGORIZED, "пришло от себя — реши сам")
+    if kind in _FIXED_REASON:
+        return _FIXED_REASON[kind]
+    return _guess(op, kind, rules)
+
+
+def _guess(op: StatementOperation, kind: OperationType, rules: list[Rule]) -> tuple[str, str]:
+    """Покупки, платежи и переводы людям: правило → справочник → MCC → «реши сам»."""
+    found = next((rule for rule in rules if _matches(rule, op)), None)
+    if found:
+        return _refine(found.category, op), f"правило: {found.pattern}"
+    known = next((p for p in KNOWN if p.lower() in op.description.lower()), None)
+    if known:
+        return KNOWN[known], f"справочник: {known}"
+    if op.mcc and op.mcc in MCC:
+        return MCC[op.mcc], f"MCC {op.mcc}"
+    people = {
+        OperationType.TRANSFER_PERSON: "перевод человеку — реши сам",
+        OperationType.TRANSFER_IN: "пришло от человека — реши сам",
     }
-    if kind in fixed:
-        return fixed[kind]
-    for rule in rules:
-        if _matches(rule, op):
-            return _refine(rule.category, op)
-    for pattern, category in KNOWN.items():
-        if pattern.lower() in op.description.lower():
-            return category
-    return MCC.get(op.mcc or "", UNCATEGORIZED)
+    return UNCATEGORIZED, people.get(kind, "не распознано")

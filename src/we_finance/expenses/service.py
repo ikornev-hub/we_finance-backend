@@ -10,12 +10,13 @@ from we_finance.credit.repository import LoanRepository
 from we_finance.credit.schedule import calculate
 from we_finance.expenses import analysis as analysis_rules
 from we_finance.expenses import goals as goal_rules
-from we_finance.expenses.categories import category_for
-from we_finance.expenses.classify import OperationType, operation_type
+from we_finance.expenses.categories import CREDIT, Rule, category_reason
+from we_finance.expenses.classify import OperationType, Owner, operation_type
 from we_finance.expenses.errors import ExpenseError, ExpenseNotFoundError
 from we_finance.expenses.goals import Goal
 from we_finance.expenses.income_check import ExpectedPayment, IncomeCheck, check_income
 from we_finance.expenses.loan_goals import LoanGoals
+from we_finance.expenses.loan_match import LoanMatcher
 from we_finance.expenses.report import MonthPlan, MonthReport, build_month
 from we_finance.expenses.repository import (
     ClassifiedOperation,
@@ -28,7 +29,7 @@ from we_finance.expenses.repository import (
     StoredOperation,
     StoredRule,
 )
-from we_finance.expenses.statement import StatementFormatError
+from we_finance.expenses.statement import Statement, StatementFormatError, StatementOperation
 from we_finance.expenses.statement_pdf import read_alfa_any
 from we_finance.salary import service as salary_service
 from we_finance.salary.repository import SalaryRepository
@@ -65,27 +66,169 @@ def month_range(month: str) -> tuple[date, date]:
     return start, end
 
 
-def import_statement(
-    repo: PostgresExpenseRepository, bank: str, file_name: str, source: BinaryIO
-) -> ImportResult:
-    """Разобрать выписку, определить тип и категорию каждой операции, сохранить без дублей."""
+@dataclass(frozen=True)
+class PreviewOperation:  # pylint: disable=too-many-instance-attributes  # поля = контракт API
+    """Новая операция выписки до сохранения: куда система её кладёт и почему."""
+
+    bank_operation_id: str
+    day: date
+    amount: Decimal
+    description: str
+    merchant: str | None
+    counterparty: str | None
+    type: str
+    category_id: str | None
+    category: str | None
+    reason: str
+    can_remember: bool  # есть получатель или магазин — правило можно запомнить
+
+
+@dataclass(frozen=True)
+class ImportPreview:
+    """Проверка выписки перед сохранением (решение заказчика 2026-10-27)."""
+
+    period_from: date | None
+    period_to: date | None
+    total: int
+    new: int
+    duplicates: int
+    operations: list[PreviewOperation]
+
+
+@dataclass(frozen=True)
+class ImportOverride:
+    """Правка при проверке: другая категория; remember — правило на получателя или магазин."""
+
+    bank_operation_id: str
+    category_id: str
+    remember: bool = False
+
+
+@dataclass(frozen=True)
+class _Known:
+    """Что известно о пользователе для разбора выписки."""
+
+    owner: Owner
+    rules: list[Rule]
+    loan_paths: dict[str, str]  # счёт кредита из «Моих счетов» → «Кредит/<кредит>»
+    loans: LoanMatcher  # сверка переводов без банка с фактами «Кредитов»
+    credit: str  # как у пользователя называется «Кредит»
+
+
+def _classify(
+    repo: PostgresExpenseRepository,
+    bank: str,
+    source: BinaryIO,
+    loan_repo: LoanRepository | None = None,
+) -> tuple[Statement, list[tuple[ClassifiedOperation, str]]]:
+    """Разобрать выписку: тип, категория и причина каждой операции. Базу не меняет."""
     parser = PARSERS.get(bank)
     if parser is None:
         raise StatementFormatError(f"Банк {bank} пока не поддерживается")
-    owner = repo.owner()
-    rules = repo.rules()
-    loans = repo.ensure_loan_categories()
+    paths = repo.ensure_loan_categories()
+    known = _Known(
+        repo.owner(),
+        repo.rules(),
+        paths,
+        LoanMatcher(loan_repo.list_loans() if loan_repo else []),
+        next(iter(paths.values()), CREDIT + "/").split("/")[0],
+    )
     statement = parser(source)
-    items = []
-    for op in statement.operations:
-        kind = operation_type(op, owner)
-        category = category_for(op, kind, rules)
-        if kind == OperationType.TRANSFER_CREDIT:  # в банк кредита — в подкатегорию кредита
-            text = op.description
-            category = next((path for bank, path in loans.items() if bank in text), category)
-        items.append(ClassifiedOperation(op, kind, category))
-    period = (statement.period_from, statement.period_to)
-    return repo.save_import(bank, file_name, items, period)
+    return statement, [_classify_one(op, known) for op in statement.operations]
+
+
+def _classify_one(op: StatementOperation, known: _Known) -> tuple[ClassifiedOperation, str]:
+    """Тип, категория, причина; перевод без банка (PDF) сверяется с фактами «Кредитов»."""
+    kind = operation_type(op, known.owner)
+    category, reason = category_reason(op, kind, known.rules)
+    if kind == OperationType.TRANSFER_CREDIT:  # в банк кредита — в подкатегорию кредита
+        category = next((p for b, p in known.loan_paths.items() if b in op.description), category)
+    elif op.description == "Перевод собственных средств":
+        found = known.loans.match(op)
+        if found:
+            kind = OperationType.TRANSFER_CREDIT
+            category, reason = f"{known.credit}/{found[0].loan.name}", found[1]
+    return ClassifiedOperation(op, kind, category), reason
+
+
+def preview_import(
+    repo: PostgresExpenseRepository,
+    bank: str,
+    source: BinaryIO,
+    loan_repo: LoanRepository | None = None,
+) -> ImportPreview:
+    """Что ляжет в базу: только новые операции, с категорией и причиной; дубли — числом."""
+    statement, items = _classify(repo, bank, source, loan_repo)
+    known = repo.existing_ids(bank, [item.operation.bank_operation_id for item, _ in items])
+    ids = repo.category_ids()
+    fresh = [
+        (item, reason) for item, reason in items if item.operation.bank_operation_id not in known
+    ]
+    return ImportPreview(
+        statement.period_from,
+        statement.period_to,
+        len(items),
+        len(fresh),
+        len(items) - len(fresh),
+        [
+            PreviewOperation(
+                item.operation.bank_operation_id,
+                item.operation.day,
+                item.operation.amount,
+                item.operation.description,
+                item.operation.merchant,
+                item.operation.counterparty,
+                str(item.kind),
+                ids.get(item.category) if item.category else None,
+                item.category,
+                reason,
+                bool(item.operation.counterparty or item.operation.merchant),
+            )
+            for item, reason in fresh
+        ],
+    )
+
+
+def import_statement(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    repo: PostgresExpenseRepository,
+    bank: str,
+    file_name: str,
+    source: BinaryIO,
+    overrides: list[ImportOverride] = (),  # type: ignore[assignment]
+    loan_repo: LoanRepository | None = None,
+) -> ImportResult:
+    """Сохранить проверенную выписку: категории — как выбрал пользователь, без дублей."""
+    statement, items = _classify(repo, bank, source, loan_repo)
+    saved = _apply_overrides(repo, [item for item, _ in items], overrides)
+    return repo.save_import(bank, file_name, saved, (statement.period_from, statement.period_to))
+
+
+def _apply_overrides(
+    repo: PostgresExpenseRepository,
+    items: list[ClassifiedOperation],
+    overrides: list[ImportOverride],
+) -> list[ClassifiedOperation]:
+    """Правки проверки: категория пользователя; remember — правило, как «Запомнить» в разборе."""
+    paths = {category_id: path for path, category_id in repo.category_ids().items()}
+    in_file = {item.operation.bank_operation_id for item in items}
+    chosen = {}
+    for override in overrides:
+        if override.bank_operation_id not in in_file:
+            raise ExpenseError(f"Операции {override.bank_operation_id} нет в этой выписке")
+        if override.category_id not in paths:
+            raise ExpenseError(f"Категории {override.category_id} нет")
+        chosen[override.bank_operation_id] = override
+    result = []
+    for item in items:
+        override = chosen.get(item.operation.bank_operation_id)
+        if override is None:
+            result.append(item)
+            continue
+        result.append(replace(item, category=paths[override.category_id], source="user"))
+        rule = _rule_for(item.operation) if override.remember else None
+        if rule is not None:
+            repo.add_rule(*rule, paths[override.category_id])
+    return result
 
 
 def list_operations(
@@ -137,7 +280,7 @@ def _get(repo: PostgresExpenseRepository, operation_id: str) -> StoredOperation:
     return operation
 
 
-def _rule_for(operation: StoredOperation) -> tuple[str, str] | None:
+def _rule_for(operation: StoredOperation | StatementOperation) -> tuple[str, str] | None:
     """Правило запоминает получателя, если он есть, иначе мерчанта; QR без них — нечего помнить."""
     if operation.counterparty:
         return "counterparty", operation.counterparty

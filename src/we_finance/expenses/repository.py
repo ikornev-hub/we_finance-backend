@@ -51,6 +51,7 @@ class ClassifiedOperation:
     operation: StatementOperation
     kind: OperationType
     category: str | None  # «Категория/Подкатегория»; None — нейтральная
+    source: str = "default"  # user — выбрал пользователь при проверке выписки
 
 
 @dataclass(frozen=True)
@@ -724,8 +725,8 @@ class PostgresExpenseRepository(_Categories, _Accounts, Goals):
                         cur.execute(
                             "INSERT INTO expense_operations (id, user_id, import_id, bank,"
                             " bank_operation_id, operated_at, amount, description, merchant, mcc,"
-                            " counterparty, type, category_id)"
-                            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                            " counterparty, type, category_id, category_source)"
+                            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
                             " ON CONFLICT (user_id, bank, bank_operation_id) DO NOTHING",
                             (
                                 uuid4().hex,
@@ -741,6 +742,7 @@ class PostgresExpenseRepository(_Categories, _Accounts, Goals):
                                 op.counterparty,
                                 item.kind,
                                 category_id,
+                                item.source,
                             ),
                         )
                         if cur.rowcount == 1:
@@ -749,6 +751,16 @@ class PostgresExpenseRepository(_Categories, _Accounts, Goals):
         finally:
             conn.close()
         return ImportResult(import_id, len(items), new, len(items) - new, uncategorized)
+
+    def existing_ids(self, bank: str, bank_operation_ids: list[str]) -> set[str]:
+        """Какие из этих операций банка уже загружены — их проверять не нужно."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT bank_operation_id FROM expense_operations"
+                " WHERE user_id = %s AND bank = %s AND bank_operation_id = ANY(%s)",
+                (self._user_id, bank, bank_operation_ids),
+            )
+            return {row[0] for row in cur.fetchall()}
 
     def add_rule(
         self, match_kind: str, pattern: str, category: str, amount: Decimal | None = None
