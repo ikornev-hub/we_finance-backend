@@ -127,7 +127,7 @@ class MonthReport:  # pylint: disable=too-many-instance-attributes  # поля =
     month: str
     income: Decimal
     expenses: Decimal
-    balance: Decimal  # доходы − расходы − отложено
+    balance: Decimal  # доходы − расходы − отложено − переложено себе (≈ как изменился счёт)
     disposable: Decimal  # по факту выписки
     saved: Decimal  # отложено по факту: на накопительные счета и вручную
     uncategorized_count: int
@@ -137,6 +137,10 @@ class MonthReport:  # pylint: disable=too-many-instance-attributes  # поля =
     forecast: MonthForecast
     groups: list[MonthGroup]
     categories: list[MonthCategory]
+    # переводы себе — нейтральные (Решение 2026-10-27): не траты и не доход, отдельной строкой
+    transfers_out: Decimal = ZERO  # ушло на свои счета
+    transfers_in: Decimal = ZERO  # пришло со своих счетов
+    other_in: Decimal = ZERO  # прочие поступления: отдали долг, возврат — сверх трат категории
 
 
 def _money(value: Decimal) -> Decimal:
@@ -146,6 +150,24 @@ def _money(value: Decimal) -> Decimal:
 def _share(amount: Decimal, base: Decimal) -> Decimal | None:
     """Доля от базы; база ≤ 0 — доли не считаются."""
     return (amount / base).quantize(SHARE, rounding=ROUND_HALF_UP) if base > 0 else None
+
+
+def _net_out(flow: Flow) -> Decimal:
+    """Трата: ушло − вернулось (возврат, отдали долг), не меньше нуля (Решение 2026-10-27)."""
+    return max(flow.outflow - flow.inflow, ZERO)
+
+
+def _spent(flows: dict[str, Flow], category: LimitedCategory) -> Decimal:
+    """Трата категории с подкатегориями: ушло − вернулось, не меньше нуля."""
+    return max(_total(flows, category, "outflow") - _total(flows, category, "inflow"), ZERO)
+
+
+def _returned(flows: dict[str, Flow], spending: list[LimitedCategory]) -> Decimal:
+    """Прочие поступления: в категории трат вернулось больше, чем ушло (отдали долг)."""
+    return sum(
+        (max(_total(flows, c, "inflow") - _total(flows, c, "outflow"), ZERO) for c in spending),
+        ZERO,
+    )
 
 
 def _total(flows: dict[str, Flow], category: LimitedCategory, attr: str) -> Decimal:
@@ -169,7 +191,7 @@ def _group_code(category: LimitedCategory) -> str:
 
 
 def _category(category: LimitedCategory, flows: dict[str, Flow], base: Decimal) -> MonthCategory:
-    amount = _money(_total(flows, category, "outflow"))
+    amount = _money(_spent(flows, category))
     code = _group_code(category)
     mandatory = code == MANDATORY
     limited = code not in (MANDATORY, SERVICE)
@@ -190,7 +212,7 @@ def _category(category: LimitedCategory, flows: dict[str, Flow], base: Decimal) 
             MonthChild(
                 child_id,
                 name,
-                child_amount := _money(flows.get(child_id, Flow()).outflow),
+                child_amount := _money(_net_out(flows.get(child_id, Flow()))),
                 None if mandatory else _share(child_amount, base),
             )
             for child_id, name in category.children
@@ -258,7 +280,7 @@ def _mandatory_by_category(
             if category.system_code == "credit"
             else plan.mandatory.get(category.id, ZERO)
         )
-        result[category.id] = _money(max(planned, _total(flows, category, "outflow")))
+        result[category.id] = _money(max(planned, _spent(flows, category)))
     return result
 
 
@@ -316,6 +338,20 @@ def _month_forecast(
     )
 
 
+def _moved(tree: list[LimitedCategory], flows: dict[str, Flow]) -> tuple[Decimal, Decimal]:
+    """Переводы себе: (ушло на свои счета, пришло со своих) — нейтральные, не траты."""
+    own = next((c for c in tree if c.system_code == "own_transfer"), None)
+    if own is None:
+        return ZERO, ZERO
+    return _total(flows, own, "outflow"), _total(flows, own, "inflow")
+
+
+def _net_moved(tree: list[LimitedCategory], flows: dict[str, Flow]) -> Decimal:
+    """Переложено себе за месяц: ушло − пришло."""
+    out, back = _moved(tree, flows)
+    return out - back
+
+
 def _saved(tree: list[LimitedCategory], flows: dict[str, Flow], manual: Decimal) -> Decimal:
     """Отложено по факту: ушло на накопительные счета минус снятое с них, плюс вручную."""
     category = next((c for c in tree if c.system_code == "savings"), None)
@@ -364,7 +400,7 @@ def build_month(  # pylint: disable=too-many-arguments,too-many-positional-argum
     """
     plan = MonthPlan() if closed else plan
     income = _income(tree, flows)
-    spending = [c for c in tree if c.system_code not in ("income", "savings")]
+    spending = [c for c in tree if c.system_code not in ("income", "savings", "own_transfer")]
     saved = _saved(tree, flows, manual_saved)
     planned = _planned(spending, flows, plan, income, saved)
     base = _money(planned[0] - planned[1] - planned[2])
@@ -375,7 +411,9 @@ def build_month(  # pylint: disable=too-many-arguments,too-many-positional-argum
         month=month,
         income=_money(income),
         expenses=_money(expenses),
-        balance=_money(income - expenses - saved),
+        balance=_money(
+            income + _returned(flows, spending) - expenses - saved - _net_moved(tree, flows)
+        ),
         disposable=_money(
             income - sum((c.amount for c in categories if c.group_code == MANDATORY), ZERO)
         ),
@@ -394,4 +432,7 @@ def build_month(  # pylint: disable=too-many-arguments,too-many-positional-argum
         ),
         groups=month_groups,
         categories=sorted(categories, key=lambda c: (-c.amount, c.name)),
+        transfers_out=_money(_moved(tree, flows)[0]),
+        transfers_in=_money(_moved(tree, flows)[1]),
+        other_in=_money(_returned(flows, spending)),
     )
