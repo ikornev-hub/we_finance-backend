@@ -40,12 +40,16 @@ _INCOME = (
     "Выплата за операции покупок",  # кэшбэк банка
     "Выплата в рамках",  # выплата по акции банка
 )
+# Вклады и экспресс-счёт Альфы — накопления, не траты и не доход (решение 2026-10-27).
+_SAVINGS = ("Перевод на экспресс-счет", "Открытие депозита", "Досрочное расторжение депозита")
 # Между своими счетами в Альфе — в обе стороны одинаково.
 _OWN = "Внутрибанковский перевод между счетами"
 
 
 def operation_type(op: StatementOperation, owner: Owner) -> OperationType:
     """Тип операции Альфа-Банка по описанию, сумме и тому, что известно о владельце."""
+    if op.description.startswith(_SAVINGS):
+        return OperationType.TRANSFER_SAVINGS
     if op.amount > 0:
         return _incoming_type(op, owner)
     return _outgoing_type(op, owner)
