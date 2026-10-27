@@ -39,7 +39,7 @@ TEST_LOGIN = "owner"  # решение 2026-10-26: на dev и test — сраз
 
 @router.post("/test-login", summary="Войти в тестовую учётку (только dev и test)")
 def test_login() -> TokenOut:
-    """Вход без пароля под tester — для разработки и тестов. На stage и prod — 404."""
+    """Вход без пароля в учётку TEST_LOGIN (владелец) — для dev и test. На stage и prod — 404."""
     if get_app_env() not in ("dev", "test"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
     url = get_database_url()

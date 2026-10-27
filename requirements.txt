@@ -5,3 +5,6 @@ uvicorn==0.54.0
 alembic==1.20.1
 sqlalchemy==2.1.6
 argon2-cffi==25.1.0
+openpyxl==3.1.5
+pypdf==6.21.2
+python-multipart==0.0.32

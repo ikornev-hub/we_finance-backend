@@ -1,5 +1,7 @@
 *.xlsm
 *.xlsx
+!tests/fixtures/statements/*.xlsx
+
 scratch/
 __pycache__
 
