@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, File, Form, Path, Query, Response, Uploa
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
 from we_finance.credit.repository import LoanRepository
-from we_finance.expenses import service
+from we_finance.expenses import balance_service, service
 from we_finance.expenses.goals import Goal
 from we_finance.expenses.income_check import IncomeCheck
 from we_finance.expenses.report import MonthReport
@@ -321,6 +321,18 @@ class ContributionIn(BaseModel):
     day: date
     amount: Annotated[Decimal, Field(decimal_places=2)]
     comment: Annotated[str | None, Field(max_length=200)] = None
+
+
+@router.get("/balance/{month}", summary="Остаток на счёте по дням: факт и ожидание")
+def balance_month(
+    repo: Repo,
+    salary_repo: Annotated[SalaryRepository, Depends(get_salary_repository)],
+    loan_repo: Annotated[LoanRepository, Depends(get_repository)],
+    today: Annotated[date, Depends(get_today)],
+    month: Annotated[str, Path(pattern=r"^\d{4}-\d{2}$")],
+) -> balance_service.BalanceView:
+    """Факт — по выписке (остаток из шапки); ожидание — платежи в свои даты, траты ровно."""
+    return balance_service.balance_view(repo, salary_repo, loan_repo, month, today)
 
 
 @router.get("/goals", summary="Цели накоплений на месяц (Р5)")

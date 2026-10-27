@@ -55,6 +55,7 @@ class Statement:
     period_from: date | None
     period_to: date | None
     operations: list[StatementOperation]
+    closing_balance: Decimal | None = None  # остаток на счёте на конец периода
 
 
 _PERIOD = re.compile(r"За период с (\d{2}\.\d{2}\.\d{4}) по (\d{2}\.\d{2}\.\d{4})")
@@ -90,7 +91,21 @@ def read_alfa(source: Path | BinaryIO) -> Statement:
         _day(period.group(1)) if period else None,
         _day(period.group(2)) if period else None,
         unique_ids(_operations(rows[header + 1 :], first_row=header + 2)),
+        _current_balance(rows[:header]),
     )
+
+
+def _current_balance(rows: list[tuple]) -> Decimal | None:
+    """«Текущий баланс | 1 216,85 RUR» из шапки XLSX — остаток на дату формирования."""
+    for row in rows:
+        cells = [cell for cell in row or () if cell is not None]
+        for index, cell in enumerate(cells[:-1]):
+            if str(cell).strip() == "Текущий баланс":
+                try:
+                    return _money(str(cells[index + 1]).replace("RUR", "").strip())
+                except ArithmeticError:
+                    return None
+    return None
 
 
 def parse_alfa(source: Path | BinaryIO) -> list[StatementOperation]:

@@ -8,6 +8,7 @@ from uuid import uuid4
 import psycopg2
 from psycopg2 import errorcodes
 
+from we_finance.expenses.balance_repository import Balances
 from we_finance.expenses.categories import (
     CASH,
     CREDIT,
@@ -693,15 +694,16 @@ class _Accounts(Postgres):
             return cur.fetchone() is not None
 
 
-class PostgresExpenseRepository(_Categories, _Accounts, Goals):
+class PostgresExpenseRepository(_Categories, _Accounts, Goals, Balances):
     """Расходы одного пользователя: категории, счета, загрузки, операции, правила."""
 
-    def save_import(
+    def save_import(  # pylint: disable=too-many-locals  # одна транзакция загрузки
         self,
         bank: str,
         file_name: str,
         items: list[ClassifiedOperation],
         period: tuple[date | None, date | None] = (None, None),
+        closing_balance: Decimal | None = None,
     ) -> ImportResult:
         """Сохранить загрузку; операции, которые уже были, пропускаются (UNIQUE в базе)."""
         ids = self.category_ids()
@@ -714,9 +716,9 @@ class PostgresExpenseRepository(_Categories, _Accounts, Goals):
                 with conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO expense_imports"
-                        " (id, user_id, bank, file_name, period_from, period_to)"
-                        " VALUES (%s, %s, %s, %s, %s, %s)",
-                        (import_id, self._user_id, bank, file_name, *period),
+                        " (id, user_id, bank, file_name, period_from, period_to, closing_balance)"
+                        " VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                        (import_id, self._user_id, bank, file_name, *period, closing_balance),
                     )
                     for item in items:
                         op = item.operation

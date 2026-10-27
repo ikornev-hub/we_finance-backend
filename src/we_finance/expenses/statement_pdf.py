@@ -135,6 +135,7 @@ def read_alfa_pdf(source: BinaryIO) -> Statement:
         date(int(period[3]), int(period[2]), int(period[1])) if period else None,
         date(int(period[6]), int(period[5]), int(period[4])) if period else None,
         unique_ids([_operation(record) for record in records]),
+        _header_total(text, "Исходящий остаток"),
     )
 
 

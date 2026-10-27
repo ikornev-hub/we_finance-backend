@@ -200,7 +200,8 @@ def import_statement(  # pylint: disable=too-many-arguments,too-many-positional-
     """Сохранить проверенную выписку: категории — как выбрал пользователь, без дублей."""
     statement, items = _classify(repo, bank, source, loan_repo)
     saved = _apply_overrides(repo, [item for item, _ in items], overrides)
-    return repo.save_import(bank, file_name, saved, (statement.period_from, statement.period_to))
+    period = (statement.period_from, statement.period_to)
+    return repo.save_import(bank, file_name, saved, period, statement.closing_balance)
 
 
 def _apply_overrides(
