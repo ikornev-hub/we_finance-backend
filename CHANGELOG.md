@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/ikornev-hub/we_finance-backend/compare/v0.7.0...v0.8.0) (2026-10-27)
+
+
+### Features
+
+* expenses — statements, categories, month report with forecast, salary check ([#41](https://github.com/ikornev-hub/we_finance-backend/issues/41)) ([5b6e784](https://github.com/ikornev-hub/we_finance-backend/commit/5b6e78433f02c16b3a3d16ec0dd772bd4931e75a))
+
 ## [0.7.0](https://github.com/ikornev-hub/we_finance-backend/compare/v0.6.0...v0.7.0) (2026-10-26)
 
 
