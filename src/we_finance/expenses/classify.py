@@ -75,7 +75,8 @@ def _outgoing_type(op: StatementOperation, owner: Owner) -> OperationType:
         return _own_type(op, owner, outgoing=True)
     if "Перевод собственных средств" in text:
         return _other_bank_type(op, owner)
-    if op.counterparty:
+    # PDF: «Перевод денежных средств» без имени — перевод клиенту Альфы (в XLSX он с именем)
+    if op.counterparty or op.description == "Перевод денежных средств":
         if op.counterparty in owner.phones:
             return OperationType.TRANSFER_OWN
         return OperationType.TRANSFER_PERSON
