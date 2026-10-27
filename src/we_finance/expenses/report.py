@@ -321,9 +321,14 @@ def _month_forecast(
     categories: list[MonthCategory],
     groups: list[MonthGroup],
 ) -> MonthForecast:
-    """Блок прогноза: (доход, обязательные, отложить) → располагаемый, потрачено, распределено."""
+    """Блок прогноза: (доход, обязательные, отложить) → располагаемый, потрачено, распределено.
+
+    Располагаемый = доход − обязательные: от него доли и границы (решение 2026-10-27).
+    Цели в приоритете, но в базу не входят — их план меняется (старт, урезание, сдвиг срока),
+    а проценты границ должны значить одни и те же рубли. Цели вычитаются из «можно ещё».
+    """
     income, mandatory, savings = planned
-    base = _money(income - mandatory - savings)
+    base = _money(income - mandatory)
     spent = sum((c.amount for c in categories if c.group_code != MANDATORY), ZERO)
     limits_total = sum((_group_limit(g) for g in groups), ZERO)
     return MonthForecast(
@@ -332,9 +337,9 @@ def _month_forecast(
         savings=_money(savings),
         disposable=base,
         spent=_money(spent),
-        can_spend=_money(base - spent),
+        can_spend=_money(base - savings - spent),
         limits_total=_money(limits_total),
-        unallocated=_money(base - limits_total),
+        unallocated=_money(base - savings - limits_total),
     )
 
 
@@ -403,7 +408,7 @@ def build_month(  # pylint: disable=too-many-arguments,too-many-positional-argum
     spending = [c for c in tree if c.system_code not in ("income", "savings", "own_transfer")]
     saved = _saved(tree, flows, manual_saved)
     planned = _planned(spending, flows, plan, income, saved)
-    base = _money(planned[0] - planned[1] - planned[2])
+    base = _money(planned[0] - planned[1])
     categories = [_category(c, flows, base) for c in spending]
     month_groups = _month_groups(groups, categories, base, planned[0])
     expenses = sum((c.amount for c in categories), ZERO)

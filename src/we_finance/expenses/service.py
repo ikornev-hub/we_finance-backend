@@ -361,6 +361,9 @@ def update_category(
         _check_limit(share, amount)  # type: ignore[arg-type]
         if category.parent_id is not None and (share is not None or amount is not None):
             raise ExpenseError("Граница задаётся только категории верхнего уровня")
+        if (share is not None or amount is not None) and category.group_id is not None:
+            if _group(repo, category.group_id).code == "mandatory":
+                raise ExpenseError("У «Обязательных» границы нет: они вычитаются из дохода")
         repo.set_limit(category_id, share, amount)  # type: ignore[arg-type]
     return _category(repo, category_id)
 
