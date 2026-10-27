@@ -70,6 +70,8 @@ def _outgoing_type(op: StatementOperation, owner: Owner) -> OperationType:
 
 def _other_bank_type(op: StatementOperation, owner: Owner) -> OperationType:
     """«Перевод собственных средств в банк …»: в банк кредита — в кредит, иначе — себе."""
+    if " в банк " not in op.description:  # PDF не пишет банк: в кредит или себе — решает человек
+        return OperationType.PAYMENT
     if any(bank in op.description for bank in owner.credit_banks):
         return OperationType.TRANSFER_CREDIT
     return OperationType.TRANSFER_OWN

@@ -28,11 +28,12 @@ from we_finance.expenses.repository import (
     StoredOperation,
     StoredRule,
 )
-from we_finance.expenses.statement import StatementFormatError, read_alfa
+from we_finance.expenses.statement import StatementFormatError
+from we_finance.expenses.statement_pdf import read_alfa_any
 from we_finance.salary import service as salary_service
 from we_finance.salary.repository import SalaryRepository
 
-PARSERS = {"alfa": read_alfa}
+PARSERS = {"alfa": read_alfa_any}  # XLSX или PDF — по содержимому
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,7 @@
 
 import re
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -89,7 +89,7 @@ def read_alfa(source: Path | BinaryIO) -> Statement:
     return Statement(
         _day(period.group(1)) if period else None,
         _day(period.group(2)) if period else None,
-        _operations(rows[header + 1 :], first_row=header + 2),
+        unique_ids(_operations(rows[header + 1 :], first_row=header + 2)),
     )
 
 
@@ -126,15 +126,43 @@ def _operations(rows: list[tuple], first_row: int) -> list[StatementOperation]:
 
 def _operation(row: tuple) -> StatementOperation:
     """Одна строка таблицы с датой → операция."""
-    description = str(row[11])
+    day, amount = _day(str(row[0])), _money(str(row[12]))
+    return make_operation(bank_id(str(row[3]), day, amount), day, amount, str(row[11]))
+
+
+def bank_id(raw: str, posted: date, amount: Decimal) -> str:
+    """Номер операции; голый «CRD_» (банк не дал номер — так у возвратов) → дата проводки + сумма.
+
+    Иначе все такие операции склеиваются в одну как «дубли» и теряются.
+    """
+    return f"CRD_{posted:%Y%m%d}_{abs(amount):.2f}" if raw == "CRD_" else raw
+
+
+def unique_ids(operations: list[StatementOperation]) -> list[StatementOperation]:
+    """Одинаковые номера в одной выписке (два одинаковых возврата в день) → хвост «_2», «_3»."""
+    seen: dict[str, int] = {}
+    result = []
+    for op in operations:
+        seen[op.bank_operation_id] = seen.get(op.bank_operation_id, 0) + 1
+        count = seen[op.bank_operation_id]
+        result.append(
+            op if count == 1 else replace(op, bank_operation_id=f"{op.bank_operation_id}_{count}")
+        )
+    return result
+
+
+def make_operation(
+    bank_operation_id: str, day: date, amount: Decimal, description: str
+) -> StatementOperation:
+    """Операция Альфа-Банка из описания: MCC, магазин и получатель — одинаково для XLSX и PDF."""
     mcc = _MCC.search(description)
     merchant = _PLACE.search(description) or _QR_SHOP.search(description)
     merchant = merchant or _QR_RECIPIENT.search(description)
     return StatementOperation(
         bank="alfa",
-        bank_operation_id=str(row[3]),
-        day=_day(str(row[0])),
-        amount=_money(str(row[12])),
+        bank_operation_id=bank_operation_id,
+        day=day,
+        amount=amount,
         description=description,
         mcc=mcc.group(1) if mcc else None,
         merchant=merchant.group(1).strip() if merchant else None,
